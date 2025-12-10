@@ -22,6 +22,27 @@ import { LocalNotifications } from "@capacitor/local-notifications";
 
 type SelectedDestination = { label: string; center: LatLng };
 
+type GpsQuality = "good" | "medium" | "poor";
+
+function gpsQualityFromAccuracy(acc: number | null | undefined): GpsQuality {
+  const a = acc ?? 999;
+  if (a <= 25) return "good";
+  if (a <= 50) return "medium";
+  return "poor";
+}
+
+function gpsLabel(q: GpsQuality) {
+  if (q === "good") return "bon";
+  if (q === "medium") return "moyen";
+  return "faible";
+}
+
+function gpsPillClass(q: GpsQuality) {
+  if (q === "good") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+  if (q === "medium") return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+  return "border-red-500/30 bg-red-500/10 text-red-200";
+}
+
 export default function MapScreen() {
   const { permission, fix, setPermission, setFix } = useLocationStore();
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +71,12 @@ export default function MapScreen() {
   const [remainingDuration, setRemainingDuration] = useState<number | null>(null);
   const [nextInstruction, setNextInstruction] = useState<string | null>(null);
 
+  // ✅ GPS quality UI
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+  const [gpsQuality, setGpsQuality] = useState<GpsQuality>("good");
+  const lastGpsAccRef = useRef<number | null>(null);
+  const lastGpsQualityRef = useRef<GpsQuality>("good");
+
   const routeAbortRef = useRef<AbortController | null>(null);
   const stopWatchRef = useRef<null | (() => void)>(null);
 
@@ -64,6 +91,8 @@ export default function MapScreen() {
   const lastOffRouteNotifAtRef = useRef(0);
   const lastInstrRef = useRef<string | null>(null);
   const lastInstrBuzzAtRef = useRef(0);
+
+  // ✅ GPS accuracy guardrails
   const GPS_MAX_ACC_FOR_SNAP = 55;      // au-delà, on limite le snap
   const GPS_MAX_ACC_FOR_OFFROUTE = 60;  // au-delà, on ne change pas l'état offRoute
   const GPS_MAX_ACC_FOR_REROUTE = 35;   // reroute seulement si assez précis
@@ -98,6 +127,14 @@ export default function MapScreen() {
 
         const pos = await getCurrentPosition();
         setFix(pos);
+
+        // ✅ init GPS badge
+        const a = pos.accuracy ?? null;
+        setGpsAccuracy(a);
+        const q = gpsQualityFromAccuracy(a);
+        setGpsQuality(q);
+        lastGpsAccRef.current = a;
+        lastGpsQualityRef.current = q;
       } catch (e) {
         setError(e instanceof Error ? e.message : "Erreur inconnue");
       }
@@ -228,6 +265,17 @@ export default function MapScreen() {
 
       const accGps = newFix.accuracy ?? 999;
 
+      // ✅ update badge GPS sans spammer
+      const nextQ = gpsQualityFromAccuracy(accGps);
+      if (nextQ !== lastGpsQualityRef.current) {
+        setGpsQuality(nextQ);
+        lastGpsQualityRef.current = nextQ;
+      }
+      if (lastGpsAccRef.current == null || Math.abs(accGps - lastGpsAccRef.current) > 5) {
+        setGpsAccuracy(accGps);
+        lastGpsAccRef.current = accGps;
+      }
+
       // ✅ stable snap with hint (reduce jitter / flashes)
       const { routeSegIndex } = useNavigationStore.getState();
 
@@ -304,7 +352,8 @@ export default function MapScreen() {
       // =========================
 
       // 1) Off-route entered => vibrate + notif (throttled)
-      if (isOff && !wasOff) {
+      // ✅ uniquement si GPS acceptable (évite faux positifs)
+      if (accGps <= GPS_MAX_ACC_FOR_OFFROUTE && isOff && !wasOff) {
         offRouteRef.current = true;
 
         const now = Date.now();
@@ -312,7 +361,7 @@ export default function MapScreen() {
           lastOffRouteBuzzAtRef.current = now;
           try {
             await Haptics.notification({ type: NotificationType.Warning });
-          } catch { }
+          } catch {}
         }
 
         if (now - lastOffRouteNotifAtRef.current > 15000) {
@@ -328,7 +377,7 @@ export default function MapScreen() {
                 },
               ],
             });
-          } catch { }
+          } catch {}
         }
       }
 
@@ -338,14 +387,15 @@ export default function MapScreen() {
       }
 
       // 2) Instruction changed => small haptic (throttled)
-      if (instr && instr !== lastInstrRef.current && distToNext <= 250) {
+      // ✅ pareil : si GPS trop mauvais, on évite les buzz “parasites”
+      if (accGps <= GPS_MAX_ACC_FOR_OFFROUTE && instr && instr !== lastInstrRef.current && distToNext <= 250) {
         const now = Date.now();
         if (now - lastInstrBuzzAtRef.current > 3500) {
           lastInstrBuzzAtRef.current = now;
           lastInstrRef.current = instr;
           try {
             await Haptics.impact({ style: "light" as any });
-          } catch { }
+          } catch {}
         }
       }
 
@@ -371,14 +421,12 @@ export default function MapScreen() {
         await calculateTo(destination);
       }
     });
-
   }
 
   const showResults = results.length > 0 && !isNavigating;
 
   // ✅ tu peux jouer avec ça (tu m’as dit que -60px te convenait)
   const BOTTOM_EXTRA_PX = -60;
-
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black touch-none">
@@ -492,8 +540,23 @@ export default function MapScreen() {
       >
         <div className="mx-auto max-w-xl">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 backdrop-blur shadow-lg p-3 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-zinc-200">{isNavigating ? "Navigation active" : "Prêt"}</div>
+            {/* ✅ header + GPS pill */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm text-zinc-200">
+                {isNavigating ? "Navigation active" : "Prêt"}
+                <span className="ml-2 text-xs text-zinc-500">
+                  {gpsAccuracy != null ? `±${Math.round(gpsAccuracy)}m` : "±—"}
+                </span>
+              </div>
+
+              <div
+                className={[
+                  "rounded-full border px-3 py-1 text-xs",
+                  gpsPillClass(gpsQuality),
+                ].join(" ")}
+              >
+                GPS {gpsLabel(gpsQuality)}
+              </div>
             </div>
 
             {/* Polished toggles */}
@@ -510,8 +573,8 @@ export default function MapScreen() {
                   isNavigating
                     ? "cursor-not-allowed opacity-50 border-zinc-800 bg-zinc-950/40"
                     : autoRouting
-                      ? "border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/15"
-                      : "border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900/60",
+                    ? "border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/15"
+                    : "border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900/60",
                 ].join(" ")}
               >
                 <div className="flex min-w-0 items-center gap-3">
@@ -553,8 +616,8 @@ export default function MapScreen() {
                   !isNavigating
                     ? "cursor-not-allowed opacity-50 border-zinc-800 bg-zinc-950/40"
                     : navFollowUser
-                      ? "border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/15"
-                      : "border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900/60",
+                    ? "border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/15"
+                    : "border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900/60",
                 ].join(" ")}
               >
                 <div className="flex min-w-0 items-center gap-3">
