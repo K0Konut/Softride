@@ -71,12 +71,6 @@ export default function MapScreen() {
   const [remainingDuration, setRemainingDuration] = useState<number | null>(null);
   const [nextInstruction, setNextInstruction] = useState<string | null>(null);
 
-  // ✅ GPS quality UI
-  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
-  const [gpsQuality, setGpsQuality] = useState<GpsQuality>("good");
-  const lastGpsAccRef = useRef<number | null>(null);
-  const lastGpsQualityRef = useRef<GpsQuality>("good");
-
   const routeAbortRef = useRef<AbortController | null>(null);
   const stopWatchRef = useRef<null | (() => void)>(null);
 
@@ -92,7 +86,7 @@ export default function MapScreen() {
   const lastInstrRef = useRef<string | null>(null);
   const lastInstrBuzzAtRef = useRef(0);
 
-  // ✅ GPS accuracy guardrails
+  // seuils GPS
   const GPS_MAX_ACC_FOR_SNAP = 55;      // au-delà, on limite le snap
   const GPS_MAX_ACC_FOR_OFFROUTE = 60;  // au-delà, on ne change pas l'état offRoute
   const GPS_MAX_ACC_FOR_REROUTE = 35;   // reroute seulement si assez précis
@@ -127,14 +121,6 @@ export default function MapScreen() {
 
         const pos = await getCurrentPosition();
         setFix(pos);
-
-        // ✅ init GPS badge
-        const a = pos.accuracy ?? null;
-        setGpsAccuracy(a);
-        const q = gpsQualityFromAccuracy(a);
-        setGpsQuality(q);
-        lastGpsAccRef.current = a;
-        lastGpsQualityRef.current = q;
       } catch (e) {
         setError(e instanceof Error ? e.message : "Erreur inconnue");
       }
@@ -265,17 +251,6 @@ export default function MapScreen() {
 
       const accGps = newFix.accuracy ?? 999;
 
-      // ✅ update badge GPS sans spammer
-      const nextQ = gpsQualityFromAccuracy(accGps);
-      if (nextQ !== lastGpsQualityRef.current) {
-        setGpsQuality(nextQ);
-        lastGpsQualityRef.current = nextQ;
-      }
-      if (lastGpsAccRef.current == null || Math.abs(accGps - lastGpsAccRef.current) > 5) {
-        setGpsAccuracy(accGps);
-        lastGpsAccRef.current = accGps;
-      }
-
       // ✅ stable snap with hint (reduce jitter / flashes)
       const { routeSegIndex } = useNavigationStore.getState();
 
@@ -352,8 +327,7 @@ export default function MapScreen() {
       // =========================
 
       // 1) Off-route entered => vibrate + notif (throttled)
-      // ✅ uniquement si GPS acceptable (évite faux positifs)
-      if (accGps <= GPS_MAX_ACC_FOR_OFFROUTE && isOff && !wasOff) {
+      if (isOff && !wasOff) {
         offRouteRef.current = true;
 
         const now = Date.now();
@@ -387,8 +361,7 @@ export default function MapScreen() {
       }
 
       // 2) Instruction changed => small haptic (throttled)
-      // ✅ pareil : si GPS trop mauvais, on évite les buzz “parasites”
-      if (accGps <= GPS_MAX_ACC_FOR_OFFROUTE && instr && instr !== lastInstrRef.current && distToNext <= 250) {
+      if (instr && instr !== lastInstrRef.current && distToNext <= 250) {
         const now = Date.now();
         if (now - lastInstrBuzzAtRef.current > 3500) {
           lastInstrBuzzAtRef.current = now;
@@ -427,6 +400,13 @@ export default function MapScreen() {
 
   // ✅ tu peux jouer avec ça (tu m’as dit que -60px te convenait)
   const BOTTOM_EXTRA_PX = -60;
+
+  // ✅ qualité GPS dérivée de la dernière fix
+  const gpsQuality = gpsQualityFromAccuracy(fix?.accuracy);
+  const gpsAccMeters =
+    typeof fix?.accuracy === "number" && Number.isFinite(fix.accuracy)
+      ? Math.round(fix.accuracy)
+      : null;
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black touch-none">
@@ -495,12 +475,36 @@ export default function MapScreen() {
               )}
             </div>
 
-            {destination && (
-              <div className="mt-2 text-xs text-zinc-300">
-                <span className="text-zinc-400">Sélectionné :</span>{" "}
-                <span className="font-semibold text-zinc-100">{destination.label}</span>
+            {/* Ligne infos: destination + GPS */}
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <div className="text-xs text-zinc-300 min-w-0">
+                {destination && (
+                  <>
+                    <span className="text-zinc-400">Sélectionné :</span>{" "}
+                    <span className="font-semibold text-zinc-100 truncate inline-block max-w-[12rem]">
+                      {destination.label}
+                    </span>
+                  </>
+                )}
+                {!destination && (
+                  <span className="text-zinc-500">Choisis une adresse pour commencer</span>
+                )}
               </div>
-            )}
+
+              {/* ✅ pastille GPS */}
+              <div
+                className={[
+                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                  gpsPillClass(gpsQuality),
+                ].join(" ")}
+              >
+                <span className="uppercase tracking-wide">GPS</span>
+                <span>{gpsLabel(gpsQuality)}</span>
+                {gpsAccMeters != null && (
+                  <span className="opacity-70">(~{gpsAccMeters} m)</span>
+                )}
+              </div>
+            </div>
 
             {searchError && <div className="mt-2 text-xs text-red-300">{searchError}</div>}
             {error && <div className="mt-2 text-xs text-red-300">{error}</div>}
@@ -540,22 +544,9 @@ export default function MapScreen() {
       >
         <div className="mx-auto max-w-xl">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 backdrop-blur shadow-lg p-3 space-y-3">
-            {/* ✅ header + GPS pill */}
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between">
               <div className="text-sm text-zinc-200">
                 {isNavigating ? "Navigation active" : "Prêt"}
-                <span className="ml-2 text-xs text-zinc-500">
-                  {gpsAccuracy != null ? `±${Math.round(gpsAccuracy)}m` : "±—"}
-                </span>
-              </div>
-
-              <div
-                className={[
-                  "rounded-full border px-3 py-1 text-xs",
-                  gpsPillClass(gpsQuality),
-                ].join(" ")}
-              >
-                GPS {gpsLabel(gpsQuality)}
               </div>
             </div>
 
@@ -580,10 +571,15 @@ export default function MapScreen() {
                 <div className="flex min-w-0 items-center gap-3">
                   <span className={autoRouting ? "text-sky-200" : "text-zinc-300"}>🧭</span>
                   <div className="min-w-0 leading-none">
-                    <div className={autoRouting ? "text-sky-100" : "text-zinc-100"} style={{ fontSize: 12, fontWeight: 700 }}>
+                    <div
+                      className={autoRouting ? "text-sky-100" : "text-zinc-100"}
+                      style={{ fontSize: 12, fontWeight: 700 }}
+                    >
                       Auto-route
                     </div>
-                    <div className="mt-1 text-[11px] text-zinc-400 truncate">Calcule à la sélection</div>
+                    <div className="mt-1 text-[11px] text-zinc-400 truncate">
+                      Calcule à la sélection
+                    </div>
                   </div>
                 </div>
 
@@ -623,7 +619,10 @@ export default function MapScreen() {
                 <div className="flex min-w-0 items-center gap-3">
                   <span className={navFollowUser ? "text-emerald-200" : "text-zinc-300"}>🎯</span>
                   <div className="min-w-0 leading-none">
-                    <div className={navFollowUser ? "text-emerald-100" : "text-zinc-100"} style={{ fontSize: 12, fontWeight: 700 }}>
+                    <div
+                      className={navFollowUser ? "text-emerald-100" : "text-zinc-100"}
+                      style={{ fontSize: 12, fontWeight: 700 }}
+                    >
                       Suivre
                     </div>
                     <div className="mt-1 text-[11px] text-zinc-400 truncate">Caméra sur toi</div>
@@ -634,7 +633,9 @@ export default function MapScreen() {
                   <div
                     className={[
                       "relative h-7 w-12 rounded-full border transition",
-                      navFollowUser ? "border-emerald-400/50 bg-emerald-400/25" : "border-zinc-700 bg-zinc-900/60",
+                      navFollowUser
+                        ? "border-emerald-400/50 bg-emerald-400/25"
+                        : "border-zinc-700 bg-zinc-900/60",
                     ].join(" ")}
                   >
                     <span
@@ -648,31 +649,13 @@ export default function MapScreen() {
               </button>
             </div>
 
-            {/* ACTIONS */}
-            <div className="flex gap-2">
-              <button
-                onClick={isNavigating ? stopNavigation : startNavigation}
-                disabled={!fix || !destination || routing.loading || !selected}
-                className="flex-1 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm hover:bg-zinc-800 disabled:opacity-50"
-              >
-                {isNavigating ? "Arrêter" : "Démarrer"}
-              </button>
-
-              <button
-                onClick={() => destination && void calculateTo(destination)}
-                disabled={!fix || !destination || routing.loading}
-                className="rounded-xl border border-zinc-800 bg-transparent px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-900 disabled:opacity-50"
-              >
-                {routing.loading ? "Calcul…" : "Recalculer"}
-              </button>
-            </div>
-
             {/* SUMMARY */}
             {selected ? (
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 space-y-1">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-zinc-100 font-semibold">
-                    {formatDistance(selected.summary.distanceMeters)} • {formatDuration(selected.summary.durationSeconds)}
+                    {formatDistance(selected.summary.distanceMeters)} •{" "}
+                    {formatDuration(selected.summary.durationSeconds)}
                   </div>
                   <div className="text-xs text-zinc-400">
                     Score <span className="text-zinc-100 font-semibold">{selected.safetyScore}</span>/100
@@ -693,7 +676,13 @@ export default function MapScreen() {
                       </span>
                       {" • "}
                       Écart:{" "}
-                      <span className={distanceToRoute != null && distanceToRoute > 35 ? "text-red-300" : "text-zinc-200"}>
+                      <span
+                        className={
+                          distanceToRoute != null && distanceToRoute > 35
+                            ? "text-red-300"
+                            : "text-zinc-200"
+                        }
+                      >
                         {distanceToRoute != null ? `${Math.round(distanceToRoute)} m` : "—"}
                       </span>
                     </div>
@@ -708,7 +697,9 @@ export default function MapScreen() {
               </div>
             ) : (
               <div className="text-xs text-zinc-400">
-                {destination ? "Sélectionne une destination puis calcule l’itinéraire." : "Choisis une destination."}
+                {destination
+                  ? "Sélectionne une destination puis calcule l’itinéraire."
+                  : "Choisis une destination."}
               </div>
             )}
           </div>
