@@ -19,6 +19,7 @@ import {
 
 import { Haptics, NotificationType, ImpactStyle } from "@capacitor/haptics";
 import { LocalNotifications } from "@capacitor/local-notifications";
+import { loadNavSession, saveNavSession } from "../../services/navigation/persistence";
 
 type SelectedDestination = { label: string; center: LatLng };
 
@@ -88,6 +89,9 @@ export default function MapScreen() {
   // perf guards (reduce high-frequency UI updates)
   const lastFixUpdateAtRef = useRef(0);
   const lastMetricsUpdateAtRef = useRef(0);
+
+  // restore guard
+  const hasRestoredSessionRef = useRef(false);
 
   // seuils GPS
   const GPS_MAX_ACC_FOR_SNAP = 55; // au-delà, on limite le snap
@@ -173,24 +177,27 @@ export default function MapScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, fix]);
 
-  async function calculateTo(dest: SelectedDestination) {
-    if (!fix) return;
+  const calculateTo = useCallback(
+    async (dest: SelectedDestination) => {
+      if (!fix) return;
 
-    routeAbortRef.current?.abort();
-    const ac = new AbortController();
-    routeAbortRef.current = ac;
+      routeAbortRef.current?.abort();
+      const ac = new AbortController();
+      routeAbortRef.current = ac;
 
-    routing.clear();
+      routing.clear();
 
-    await routing.calculate(
-      {
-        origin: fix,
-        destination: dest.center,
-        preference: { preferBikeLanes: 1, preferQuietStreets: 0.8 },
-      },
-      { signal: ac.signal }
-    );
-  }
+      await routing.calculate(
+        {
+          origin: fix,
+          destination: dest.center,
+          preference: { preferBikeLanes: 1, preferQuietStreets: 0.8 },
+        },
+        { signal: ac.signal }
+      );
+    },
+    [fix, routing]
+  );
 
   function setAsDestination(r: PlaceResult) {
     const dest = { label: r.label, center: r.center };
@@ -201,6 +208,26 @@ export default function MapScreen() {
     if (autoRouting) void calculateTo(dest);
     else routing.clear();
   }
+
+  const stopNavigation = useCallback(() => {
+    stopWatchRef.current?.();
+    stopWatchRef.current = null;
+
+    nav.stop();
+
+    // reset feedback guards
+    offRouteRef.current = false;
+    lastInstrRef.current = null;
+
+    offRouteStreakRef.current = 0;
+    setDistanceToRoute(null);
+    setRemainingDistance(null);
+    setRemainingDuration(null);
+    setNextInstruction(null);
+
+    // on ne garde pas de session "inactive"
+    saveNavSession(null);
+  }, [nav]);
 
   function clearDestination() {
     stopNavigation();
@@ -216,29 +243,22 @@ export default function MapScreen() {
 
     setQ("");
     setResults([]);
+
+    // efface toute session nav persistée
+    saveNavSession(null);
   }
 
-  function stopNavigation() {
-    stopWatchRef.current?.();
-    stopWatchRef.current = null;
-
-    nav.stop();
-
-    // reset feedback guards
-    offRouteRef.current = false;
-    lastInstrRef.current = null;
-
-    offRouteStreakRef.current = 0;
-    setDistanceToRoute(null);
-    setRemainingDistance(null);
-    setRemainingDuration(null);
-    setNextInstruction(null);
-  }
-
-  function startNavigation() {
+  const startNavigation = useCallback(() => {
     if (!destination || !selected || !fix) return;
 
     nav.start(); // followUser = true dans le store
+
+    // persiste la session de nav
+    saveNavSession({
+      version: 1,
+      savedAt: Date.now(),
+      destination,
+    });
 
     // reset feedback guards
     offRouteRef.current = false;
@@ -420,7 +440,30 @@ export default function MapScreen() {
         await calculateTo(destination);
       }
     });
-  }
+  }, [destination, selected, fix, nav, setFix, calculateTo, stopNavigation]);
+
+  // 🔁 Restauration d'une session de nav persistée
+  useEffect(() => {
+    if (hasRestoredSessionRef.current) return;
+    if (!fix) return;
+
+    const session = loadNavSession();
+    if (!session) return;
+
+    hasRestoredSessionRef.current = true;
+
+    const dest: SelectedDestination = session.destination;
+    setDestination(dest);
+    setQ(dest.label);
+
+    void (async () => {
+      await calculateTo(dest);
+      const selectedNow = useRoutingStore.getState().selected();
+      if (selectedNow && !useNavigationStore.getState().isNavigating) {
+        startNavigation();
+      }
+    })();
+  }, [fix, calculateTo, startNavigation]);
 
   const showResults = results.length > 0 && !isNavigating;
 
