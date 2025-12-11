@@ -17,7 +17,7 @@ import {
   remainingRouteDistanceMeters,
 } from "../../services/routing/geo";
 
-import { Haptics, NotificationType } from "@capacitor/haptics";
+import { Haptics, NotificationType, ImpactStyle } from "@capacitor/haptics";
 import { LocalNotifications } from "@capacitor/local-notifications";
 
 type SelectedDestination = { label: string; center: LatLng };
@@ -79,17 +79,20 @@ export default function MapScreen() {
   const lastRerouteAtRef = useRef(0);
 
   // --- feedback guards (avoid spam)
-  // IMPORTANT: offRouteRef devient l'état OFF-ROUTE "stable" (hystérésis)
   const offRouteRef = useRef(false);
   const lastOffRouteBuzzAtRef = useRef(0);
   const lastOffRouteNotifAtRef = useRef(0);
   const lastInstrRef = useRef<string | null>(null);
   const lastInstrBuzzAtRef = useRef(0);
 
+  // perf guards (reduce high-frequency UI updates)
+  const lastFixUpdateAtRef = useRef(0);
+  const lastMetricsUpdateAtRef = useRef(0);
+
   // seuils GPS
-  const GPS_MAX_ACC_FOR_SNAP = 55;      // au-delà, on limite le snap
-  const GPS_MAX_ACC_FOR_OFFROUTE = 60;  // au-delà, on ne change pas l'état offRoute
-  const GPS_MAX_ACC_FOR_REROUTE = 35;   // reroute seulement si assez précis
+  const GPS_MAX_ACC_FOR_SNAP = 55; // au-delà, on limite le snap
+  const GPS_MAX_ACC_FOR_OFFROUTE = 60; // au-delà, on ne change pas l'état offRoute
+  const GPS_MAX_ACC_FOR_REROUTE = 35; // reroute seulement si assez précis
 
   // ✅ stable gesture callback (anti-flash)
   const handleUserGesture = useCallback(() => {
@@ -106,7 +109,7 @@ export default function MapScreen() {
           await LocalNotifications.requestPermissions();
         }
       } catch {
-        // no-op (web, dev)
+        /* noop */
       }
     })();
   }, []);
@@ -189,7 +192,7 @@ export default function MapScreen() {
     );
   }
 
-  function useAsDestination(r: PlaceResult) {
+  function setAsDestination(r: PlaceResult) {
     const dest = { label: r.label, center: r.center };
     setDestination(dest);
     setResults([]);
@@ -246,15 +249,25 @@ export default function MapScreen() {
 
     stopWatchRef.current?.();
     stopWatchRef.current = watchPosition(async (newFix) => {
-      setFix(newFix);
+      const nowTs = Date.now();
+
+      // --- Gating simple pour l'update du store location (setFix)
+      const FIX_MIN_INTERVAL_MS = 220;
+      const shouldUpdateFix =
+        lastFixUpdateAtRef.current === 0 ||
+        nowTs - lastFixUpdateAtRef.current >= FIX_MIN_INTERVAL_MS;
+
+      if (shouldUpdateFix) {
+        lastFixUpdateAtRef.current = nowTs;
+        setFix(newFix);
+      }
+
       if (!selected) return;
 
       const accGps = newFix.accuracy ?? 999;
 
-      // ✅ stable snap with hint (reduce jitter / flashes)
       const { routeSegIndex } = useNavigationStore.getState();
 
-      // si GPS mauvais => on évite le full-scan qui peut "sauter" loin
       const snap = distanceToRouteMeters(newFix, selected.geometry, {
         hintSegmentIndex: routeSegIndex ?? undefined,
         searchWindow: accGps > GPS_MAX_ACC_FOR_SNAP ? 6 : 18,
@@ -270,9 +283,9 @@ export default function MapScreen() {
       const segmentIndex = snap.segmentIndex;
       const t = snap.t;
 
-      // ✅ OFF-ROUTE hystérésis + garde-fou accuracy
-      const OFF_ROUTE_ENTER = 40; // devient OFF au-dessus de 40m
-      const OFF_ROUTE_EXIT = 28;  // redevient ON-route en dessous de 28m
+      // OFF-ROUTE hystérésis + garde-fou accuracy
+      const OFF_ROUTE_ENTER = 40;
+      const OFF_ROUTE_EXIT = 28;
 
       const wasOff = offRouteRef.current;
 
@@ -281,13 +294,9 @@ export default function MapScreen() {
         isOff = wasOff ? distance > OFF_ROUTE_EXIT : distance > OFF_ROUTE_ENTER;
       }
 
-      // pousse l'état stable dans le store
       nav.setOffRoute(isOff);
-      setDistanceToRoute(distance);
 
       const rem = remainingRouteDistanceMeters(selected.geometry, segmentIndex, t);
-      setRemainingDistance(rem);
-      nav.update({ remainingDistance: rem, distanceToRoute: distance });
 
       const speed = newFix.speed ?? null;
       const totalDist = selected.summary.distanceMeters;
@@ -298,8 +307,6 @@ export default function MapScreen() {
       else etaSec = (totalDist > 1 ? rem / totalDist : 1) * totalDur;
 
       etaSec = Math.max(0, etaSec);
-      setRemainingDuration(etaSec);
-      nav.update({ remainingDurationSec: etaSec });
 
       // Next instruction + distance to next maneuver
       const traveled = Math.max(0, totalDist - rem);
@@ -315,18 +322,31 @@ export default function MapScreen() {
       const distToNext = Math.max(0, acc - traveled);
       const instr = selected.steps[idx]?.instruction ?? null;
 
-      setNextInstruction(instr);
-      nav.update({
-        stepIndex: idx,
-        nextInstruction: instr,
-        distanceToNextManeuver: distToNext,
-      });
+      // --- Gating pour les métriques UI + nav.update
+      const METRICS_MIN_INTERVAL_MS = 350;
+      const shouldUpdateMetrics =
+        lastMetricsUpdateAtRef.current === 0 ||
+        nowTs - lastMetricsUpdateAtRef.current >= METRICS_MIN_INTERVAL_MS;
 
-      // =========================
-      // ✅ FEEDBACKS (Haptics + Notif only)
-      // =========================
+      if (shouldUpdateMetrics) {
+        lastMetricsUpdateAtRef.current = nowTs;
 
-      // 1) Off-route entered => vibrate + notif (throttled)
+        setDistanceToRoute(distance);
+        setRemainingDistance(rem);
+        setRemainingDuration(etaSec);
+        setNextInstruction(instr);
+
+        nav.update({
+          remainingDistance: rem,
+          distanceToRoute: distance,
+          remainingDurationSec: etaSec,
+          stepIndex: idx,
+          nextInstruction: instr,
+          distanceToNextManeuver: distToNext,
+        });
+      }
+
+      // Off-route entered => vibrate + notif (throttled)
       if (isOff && !wasOff) {
         offRouteRef.current = true;
 
@@ -335,7 +355,9 @@ export default function MapScreen() {
           lastOffRouteBuzzAtRef.current = now;
           try {
             await Haptics.notification({ type: NotificationType.Warning });
-          } catch {}
+          } catch {
+            /* noop */
+          }
         }
 
         if (now - lastOffRouteNotifAtRef.current > 15000) {
@@ -351,7 +373,9 @@ export default function MapScreen() {
                 },
               ],
             });
-          } catch {}
+          } catch {
+            /* noop */
+          }
         }
       }
 
@@ -360,15 +384,17 @@ export default function MapScreen() {
         offRouteRef.current = false;
       }
 
-      // 2) Instruction changed => small haptic (throttled)
+      // Instruction changed => small haptic (throttled)
       if (instr && instr !== lastInstrRef.current && distToNext <= 250) {
         const now = Date.now();
         if (now - lastInstrBuzzAtRef.current > 3500) {
           lastInstrBuzzAtRef.current = now;
           lastInstrRef.current = instr;
           try {
-            await Haptics.impact({ style: "light" as any });
-          } catch {}
+            await Haptics.impact({ style: ImpactStyle.Light });
+          } catch {
+            /* noop */
+          }
         }
       }
 
@@ -378,7 +404,7 @@ export default function MapScreen() {
         return;
       }
 
-      // Reroute (utilise l'état stable + garde-fou accuracy)
+      // Reroute (stable + accuracy)
       const ACC_OK = accGps < GPS_MAX_ACC_FOR_REROUTE;
       const COOLDOWN_MS = 12000;
 
@@ -398,10 +424,9 @@ export default function MapScreen() {
 
   const showResults = results.length > 0 && !isNavigating;
 
-  // ✅ tu peux jouer avec ça (tu m’as dit que -60px te convenait)
   const BOTTOM_EXTRA_PX = -60;
 
-  // ✅ qualité GPS dérivée de la dernière fix
+  // GPS quality pill
   const gpsQuality = gpsQualityFromAccuracy(fix?.accuracy);
   const gpsAccMeters =
     typeof fix?.accuracy === "number" && Number.isFinite(fix.accuracy)
@@ -478,20 +503,19 @@ export default function MapScreen() {
             {/* Ligne infos: destination + GPS */}
             <div className="mt-2 flex items-center justify-between gap-2">
               <div className="text-xs text-zinc-300 min-w-0">
-                {destination && (
+                {destination ? (
                   <>
                     <span className="text-zinc-400">Sélectionné :</span>{" "}
                     <span className="font-semibold text-zinc-100 truncate inline-block max-w-[12rem]">
                       {destination.label}
                     </span>
                   </>
-                )}
-                {!destination && (
+                ) : (
                   <span className="text-zinc-500">Choisis une adresse pour commencer</span>
                 )}
               </div>
 
-              {/* ✅ pastille GPS */}
+              {/* Pastille GPS */}
               <div
                 className={[
                   "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
@@ -500,9 +524,7 @@ export default function MapScreen() {
               >
                 <span className="uppercase tracking-wide">GPS</span>
                 <span>{gpsLabel(gpsQuality)}</span>
-                {gpsAccMeters != null && (
-                  <span className="opacity-70">(~{gpsAccMeters} m)</span>
-                )}
+                {gpsAccMeters != null && <span className="opacity-70">(~{gpsAccMeters} m)</span>}
               </div>
             </div>
 
@@ -522,7 +544,7 @@ export default function MapScreen() {
                   <div className="text-sm text-zinc-100">{r.label}</div>
                   <div className="mt-2 flex justify-end">
                     <button
-                      onClick={() => useAsDestination(r)}
+                      onClick={() => setAsDestination(r)}
                       className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40"
                     >
                       Utiliser comme destination
@@ -545,9 +567,7 @@ export default function MapScreen() {
         <div className="mx-auto max-w-xl">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 backdrop-blur shadow-lg p-3 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="text-sm text-zinc-200">
-                {isNavigating ? "Navigation active" : "Prêt"}
-              </div>
+              <div className="text-sm text-zinc-200">{isNavigating ? "Navigation active" : "Prêt"}</div>
             </div>
 
             {/* Polished toggles */}
@@ -577,9 +597,7 @@ export default function MapScreen() {
                     >
                       Auto-route
                     </div>
-                    <div className="mt-1 text-[11px] text-zinc-400 truncate">
-                      Calcule à la sélection
-                    </div>
+                    <div className="mt-1 text-[11px] text-zinc-400 truncate">Calcule à la sélection</div>
                   </div>
                 </div>
 
@@ -633,9 +651,7 @@ export default function MapScreen() {
                   <div
                     className={[
                       "relative h-7 w-12 rounded-full border transition",
-                      navFollowUser
-                        ? "border-emerald-400/50 bg-emerald-400/25"
-                        : "border-zinc-700 bg-zinc-900/60",
+                      navFollowUser ? "border-emerald-400/50 bg-emerald-400/25" : "border-zinc-700 bg-zinc-900/60",
                     ].join(" ")}
                   >
                     <span
@@ -646,6 +662,25 @@ export default function MapScreen() {
                     />
                   </div>
                 </div>
+              </button>
+            </div>
+
+            {/* ACTIONS */}
+            <div className="flex gap-2">
+              <button
+                onClick={isNavigating ? stopNavigation : startNavigation}
+                disabled={!fix || !destination || routing.loading || !selected}
+                className="flex-1 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {isNavigating ? "Arrêter" : "Démarrer"}
+              </button>
+
+              <button
+                onClick={() => destination && void calculateTo(destination)}
+                disabled={!fix || !destination || routing.loading}
+                className="rounded-xl border border-zinc-800 bg-transparent px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-900 disabled:opacity-50"
+              >
+                {routing.loading ? "Calcul…" : "Recalculer"}
               </button>
             </div>
 
@@ -678,9 +713,7 @@ export default function MapScreen() {
                       Écart:{" "}
                       <span
                         className={
-                          distanceToRoute != null && distanceToRoute > 35
-                            ? "text-red-300"
-                            : "text-zinc-200"
+                          distanceToRoute != null && distanceToRoute > 35 ? "text-red-300" : "text-zinc-200"
                         }
                       >
                         {distanceToRoute != null ? `${Math.round(distanceToRoute)} m` : "—"}
@@ -697,9 +730,7 @@ export default function MapScreen() {
               </div>
             ) : (
               <div className="text-xs text-zinc-400">
-                {destination
-                  ? "Sélectionne une destination puis calcule l’itinéraire."
-                  : "Choisis une destination."}
+                {destination ? "Sélectionne une destination puis calcule l’itinéraire." : "Choisis une destination."}
               </div>
             )}
           </div>
