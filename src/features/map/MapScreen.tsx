@@ -913,7 +913,7 @@ export default function MapScreen() {
               </button>
             </div>
 
-            {/* SUMMARY */}
+                        {/* SUMMARY */}
             {selected ? (
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 space-y-1">
                 <div className="flex items-center justify-between">
@@ -922,39 +922,69 @@ export default function MapScreen() {
                     {formatDuration(selected.summary.durationSeconds)}
                   </div>
                   <div className="text-xs text-zinc-400">
-                    Score <span className="text-zinc-100 font-semibold">{selected.safetyScore}</span>/100
+                    Score{" "}
+                    <span className="text-zinc-100 font-semibold">
+                      {selected.safetyScore}
+                    </span>
+                    /100
                   </div>
                 </div>
 
-                {isNavigating && (
+                {/* 👉 En preview on montre tout, en nav on ne garde que l'écart */}
+                {isNavigating ? (
+                  <div className="text-xs text-zinc-400">
+                    Écart par rapport à l’itinéraire :{" "}
+                    <span
+                      className={
+                        distanceToRoute != null && distanceToRoute > 35
+                          ? "text-red-300"
+                          : "text-zinc-200"
+                      }
+                    >
+                      {distanceToRoute != null
+                        ? `${Math.round(distanceToRoute)} m`
+                        : "—"}
+                    </span>
+                  </div>
+                ) : (
                   <div className="text-xs text-zinc-400">
                     Restant:{" "}
                     <span className="text-zinc-100 font-semibold">
-                      {remainingDistance != null ? formatDistance(remainingDistance) : "—"}
+                      {remainingDistance != null
+                        ? formatDistance(remainingDistance)
+                        : "—"}
                     </span>
                     {" • "}
                     ETA:{" "}
                     <span className="text-zinc-100 font-semibold">
-                      {remainingDuration != null ? formatDuration(remainingDuration) : "—"}
+                      {remainingDuration != null
+                        ? formatDuration(remainingDuration)
+                        : "—"}
                     </span>
                     {" • "}
                     Écart:{" "}
                     <span
                       className={
-                        distanceToRoute != null && distanceToRoute > 35 ? "text-red-300" : "text-zinc-200"
+                        distanceToRoute != null && distanceToRoute > 35
+                          ? "text-red-300"
+                          : "text-zinc-200"
                       }
                     >
-                      {distanceToRoute != null ? `${Math.round(distanceToRoute)} m` : "—"}
+                      {distanceToRoute != null
+                        ? `${Math.round(distanceToRoute)} m`
+                        : "—"}
                     </span>
                   </div>
-                  // 👉 on ne répète plus nextInstruction ici, c'est NavBanner qui fait foi
                 )}
               </div>
             ) : (
               <div className="text-xs text-zinc-400">
-                {destination ? "Sélectionne une destination puis calcule l’itinéraire." : "Choisis une destination."}
+                {destination
+                  ? "Sélectionne une destination puis calcule l’itinéraire."
+                  : "Choisis une destination."}
               </div>
             )}
+
           </div>
         </div>
       </div>
