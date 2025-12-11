@@ -72,6 +72,7 @@ export function useFallDetection(opts: Options = {}) {
     gyroSpikeCountRef.current = 0;
 
     let mounted = true;
+    const engine = engineRef.current;
 
     (async () => {
       listenerRef.current = await Motion.addListener("accel", (ev) => {
@@ -123,7 +124,7 @@ export function useFallDetection(opts: Options = {}) {
           rGamma: ev.rotationRate?.gamma ?? 0,
         };
 
-        const out = engineRef.current.push(s);
+        const out = engine.push(s);
         if (!out) return;
 
         if (out.type === "POSSIBLE_FALL") {
@@ -143,7 +144,7 @@ export function useFallDetection(opts: Options = {}) {
       mounted = false;
       listenerRef.current?.remove();
       listenerRef.current = null;
-      engineRef.current.reset();
+      engine.reset();
     };
   }, [
     enabled,

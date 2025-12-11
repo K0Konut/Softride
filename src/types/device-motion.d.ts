@@ -6,6 +6,5 @@ declare global {
   }
 
   // iOS Safari expose DeviceMotionEvent global
-  // eslint-disable-next-line no-var
   var DeviceMotionEvent: DeviceMotionEventConstructor;
 }

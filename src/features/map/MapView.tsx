@@ -197,7 +197,8 @@ export default function MapView({
     } else {
       destMarkerRef.current.setLngLat(lngLat);
     }
-  }, [destination?.lat, destination?.lng]);
+  }, [destination]);
+
 
   // Update routes (alts + selected) — sans casser map si pas encore "load"
   useEffect(() => {

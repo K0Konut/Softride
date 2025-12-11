@@ -17,10 +17,32 @@ import {
   remainingRouteDistanceMeters,
 } from "../../services/routing/geo";
 
-import { Haptics, NotificationType } from "@capacitor/haptics";
+import { Haptics, NotificationType, ImpactStyle } from "@capacitor/haptics";
 import { LocalNotifications } from "@capacitor/local-notifications";
+import { loadNavSession, saveNavSession } from "../../services/navigation/persistence";
 
 type SelectedDestination = { label: string; center: LatLng };
+
+type GpsQuality = "good" | "medium" | "poor";
+
+function gpsQualityFromAccuracy(acc: number | null | undefined): GpsQuality {
+  const a = acc ?? 999;
+  if (a <= 25) return "good";
+  if (a <= 50) return "medium";
+  return "poor";
+}
+
+function gpsLabel(q: GpsQuality) {
+  if (q === "good") return "bon";
+  if (q === "medium") return "moyen";
+  return "faible";
+}
+
+function gpsPillClass(q: GpsQuality) {
+  if (q === "good") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+  if (q === "medium") return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+  return "border-red-500/30 bg-red-500/10 text-red-200";
+}
 
 export default function MapScreen() {
   const { permission, fix, setPermission, setFix } = useLocationStore();
@@ -48,25 +70,50 @@ export default function MapScreen() {
   const [distanceToRoute, setDistanceToRoute] = useState<number | null>(null);
   const [remainingDistance, setRemainingDistance] = useState<number | null>(null);
   const [remainingDuration, setRemainingDuration] = useState<number | null>(null);
-  const [nextInstruction, setNextInstruction] = useState<string | null>(null);
 
   const routeAbortRef = useRef<AbortController | null>(null);
   const stopWatchRef = useRef<null | (() => void)>(null);
+
+
+  // auto-start nav après calcul si autoRouting est actif
+  const pendingAutoStartRef = useRef(false);
 
   // reroute logic
   const offRouteStreakRef = useRef(0);
   const lastRerouteAtRef = useRef(0);
 
   // --- feedback guards (avoid spam)
-  // IMPORTANT: offRouteRef devient l'état OFF-ROUTE "stable" (hystérésis)
   const offRouteRef = useRef(false);
   const lastOffRouteBuzzAtRef = useRef(0);
   const lastOffRouteNotifAtRef = useRef(0);
   const lastInstrRef = useRef<string | null>(null);
   const lastInstrBuzzAtRef = useRef(0);
-  const GPS_MAX_ACC_FOR_SNAP = 55;      // au-delà, on limite le snap
-  const GPS_MAX_ACC_FOR_OFFROUTE = 60;  // au-delà, on ne change pas l'état offRoute
-  const GPS_MAX_ACC_FOR_REROUTE = 35;   // reroute seulement si assez précis
+
+  // perf guards (reduce high-frequency UI updates)
+  const lastFixUpdateAtRef = useRef(0);
+  const lastMetricsUpdateAtRef = useRef(0);
+
+  // restore guard
+  const hasRestoredSessionRef = useRef(false);
+
+  // UX: toast "navigation reprise"
+  const [resumeBannerLabel, setResumeBannerLabel] = useState<string | null>(null);
+
+  // UX: toast "nouvel itinéraire calculé"
+  const [rerouteBannerLabel, setRerouteBannerLabel] = useState<string | null>(null);
+
+  // UX: arrivée
+  const [hasArrived, setHasArrived] = useState(false);
+  const [navActualDurationSec, setNavActualDurationSec] = useState<number | null>(null);
+  const navStartAtRef = useRef<number | null>(null);
+
+  // 🧭 Dynamic map zoom
+  const [mapZoom, setMapZoom] = useState<number>(16);
+
+  // seuils GPS
+  const GPS_MAX_ACC_FOR_SNAP = 55; // au-delà, on limite le snap
+  const GPS_MAX_ACC_FOR_OFFROUTE = 60; // au-delà, on ne change pas l'état offRoute
+  const GPS_MAX_ACC_FOR_REROUTE = 35; // reroute seulement si assez précis
 
   // ✅ stable gesture callback (anti-flash)
   const handleUserGesture = useCallback(() => {
@@ -83,7 +130,7 @@ export default function MapScreen() {
           await LocalNotifications.requestPermissions();
         }
       } catch {
-        // no-op (web, dev)
+        /* noop */
       }
     })();
   }, []);
@@ -147,52 +194,45 @@ export default function MapScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, fix]);
 
-  async function calculateTo(dest: SelectedDestination) {
-    if (!fix) return;
+  const calculateTo = useCallback(
+    async (dest: SelectedDestination) => {
+      if (!fix) return;
 
-    routeAbortRef.current?.abort();
-    const ac = new AbortController();
-    routeAbortRef.current = ac;
+      routeAbortRef.current?.abort();
+      const ac = new AbortController();
+      routeAbortRef.current = ac;
 
-    routing.clear();
+      routing.clear();
 
-    await routing.calculate(
-      {
-        origin: fix,
-        destination: dest.center,
-        preference: { preferBikeLanes: 1, preferQuietStreets: 0.8 },
-      },
-      { signal: ac.signal }
-    );
-  }
+      await routing.calculate(
+        {
+          origin: fix,
+          destination: dest.center,
+          preference: { preferBikeLanes: 1, preferQuietStreets: 0.8 },
+        },
+        { signal: ac.signal }
+      );
+    },
+    [fix, routing]
+  );
 
-  function useAsDestination(r: PlaceResult) {
+    function setAsDestination(r: PlaceResult) {
     const dest = { label: r.label, center: r.center };
     setDestination(dest);
     setResults([]);
     setQ(r.label);
 
-    if (autoRouting) void calculateTo(dest);
-    else routing.clear();
+    if (autoRouting) {
+      // on veut démarrer dès que le routing a fini
+      pendingAutoStartRef.current = true;
+      void calculateTo(dest);
+    } else {
+      routing.clear();
+    }
   }
 
-  function clearDestination() {
-    stopNavigation();
-    setDestination(null);
-    routing.clear();
 
-    setDistanceToRoute(null);
-    setRemainingDistance(null);
-    setRemainingDuration(null);
-    setNextInstruction(null);
-
-    nav.reset();
-
-    setQ("");
-    setResults([]);
-  }
-
-  function stopNavigation() {
+  const stopNavigation = useCallback(() => {
     stopWatchRef.current?.();
     stopWatchRef.current = null;
 
@@ -206,13 +246,56 @@ export default function MapScreen() {
     setDistanceToRoute(null);
     setRemainingDistance(null);
     setRemainingDuration(null);
-    setNextInstruction(null);
+
+    navStartAtRef.current = null;
+    setHasArrived(false);
+    setNavActualDurationSec(null);
+
+    // on ne garde pas de session "inactive"
+    saveNavSession(null);
+    setResumeBannerLabel(null);
+    setRerouteBannerLabel(null);
+
+    // reset zoom doux
+    setMapZoom(16);
+  }, [nav]);
+
+  function clearDestination() {
+    stopNavigation();
+    setDestination(null);
+    routing.clear();
+
+    setDistanceToRoute(null);
+    setRemainingDistance(null);
+    setRemainingDuration(null);
+
+    nav.reset();
+
+    setQ("");
+    setResults([]);
+
+    // efface toute session nav persistée
+    saveNavSession(null);
+    setResumeBannerLabel(null);
+    setRerouteBannerLabel(null);
   }
 
-  function startNavigation() {
+  const startNavigation = useCallback(() => {
     if (!destination || !selected || !fix) return;
 
     nav.start(); // followUser = true dans le store
+
+    // départ de session nav
+    navStartAtRef.current = Date.now();
+    setHasArrived(false);
+    setNavActualDurationSec(null);
+
+    // persiste la session de nav
+    saveNavSession({
+      version: 1,
+      savedAt: Date.now(),
+      destination,
+    });
 
     // reset feedback guards
     offRouteRef.current = false;
@@ -223,15 +306,25 @@ export default function MapScreen() {
 
     stopWatchRef.current?.();
     stopWatchRef.current = watchPosition(async (newFix) => {
-      setFix(newFix);
+      const nowTs = Date.now();
+
+      // --- Gating simple pour l'update du store location (setFix)
+      const FIX_MIN_INTERVAL_MS = 220;
+      const shouldUpdateFix =
+        lastFixUpdateAtRef.current === 0 ||
+        nowTs - lastFixUpdateAtRef.current >= FIX_MIN_INTERVAL_MS;
+
+      if (shouldUpdateFix) {
+        lastFixUpdateAtRef.current = nowTs;
+        setFix(newFix);
+      }
+
       if (!selected) return;
 
       const accGps = newFix.accuracy ?? 999;
 
-      // ✅ stable snap with hint (reduce jitter / flashes)
       const { routeSegIndex } = useNavigationStore.getState();
 
-      // si GPS mauvais => on évite le full-scan qui peut "sauter" loin
       const snap = distanceToRouteMeters(newFix, selected.geometry, {
         hintSegmentIndex: routeSegIndex ?? undefined,
         searchWindow: accGps > GPS_MAX_ACC_FOR_SNAP ? 6 : 18,
@@ -247,9 +340,9 @@ export default function MapScreen() {
       const segmentIndex = snap.segmentIndex;
       const t = snap.t;
 
-      // ✅ OFF-ROUTE hystérésis + garde-fou accuracy
-      const OFF_ROUTE_ENTER = 40; // devient OFF au-dessus de 40m
-      const OFF_ROUTE_EXIT = 28;  // redevient ON-route en dessous de 28m
+      // OFF-ROUTE hystérésis + garde-fou accuracy
+      const OFF_ROUTE_ENTER = 40;
+      const OFF_ROUTE_EXIT = 28;
 
       const wasOff = offRouteRef.current;
 
@@ -258,13 +351,9 @@ export default function MapScreen() {
         isOff = wasOff ? distance > OFF_ROUTE_EXIT : distance > OFF_ROUTE_ENTER;
       }
 
-      // pousse l'état stable dans le store
       nav.setOffRoute(isOff);
-      setDistanceToRoute(distance);
 
       const rem = remainingRouteDistanceMeters(selected.geometry, segmentIndex, t);
-      setRemainingDistance(rem);
-      nav.update({ remainingDistance: rem, distanceToRoute: distance });
 
       const speed = newFix.speed ?? null;
       const totalDist = selected.summary.distanceMeters;
@@ -275,8 +364,6 @@ export default function MapScreen() {
       else etaSec = (totalDist > 1 ? rem / totalDist : 1) * totalDur;
 
       etaSec = Math.max(0, etaSec);
-      setRemainingDuration(etaSec);
-      nav.update({ remainingDurationSec: etaSec });
 
       // Next instruction + distance to next maneuver
       const traveled = Math.max(0, totalDist - rem);
@@ -292,18 +379,56 @@ export default function MapScreen() {
       const distToNext = Math.max(0, acc - traveled);
       const instr = selected.steps[idx]?.instruction ?? null;
 
-      setNextInstruction(instr);
-      nav.update({
-        stepIndex: idx,
-        nextInstruction: instr,
-        distanceToNextManeuver: distToNext,
-      });
+      // --- Gating pour les métriques UI + nav.update
+      const METRICS_MIN_INTERVAL_MS = 350;
+      const shouldUpdateMetrics =
+        lastMetricsUpdateAtRef.current === 0 ||
+        nowTs - lastMetricsUpdateAtRef.current >= METRICS_MIN_INTERVAL_MS;
 
-      // =========================
-      // ✅ FEEDBACKS (Haptics + Notif only)
-      // =========================
+      if (shouldUpdateMetrics) {
+        lastMetricsUpdateAtRef.current = nowTs;
 
-      // 1) Off-route entered => vibrate + notif (throttled)
+        setDistanceToRoute(distance);
+        setRemainingDistance(rem);
+        setRemainingDuration(etaSec);
+
+        nav.update({
+          remainingDistance: rem,
+          distanceToRoute: distance,
+          remainingDurationSec: etaSec,
+          stepIndex: idx,
+          nextInstruction: instr,
+          distanceToNextManeuver: distToNext,
+        });
+
+        // 🔍 Dynamic zoom calculé à partir de la vitesse + contexte
+        let targetZoom = 16;
+
+        if (typeof speed === "number" && speed > 0.5 && speed < 20) {
+          const kmh = speed * 3.6;
+
+          if (kmh < 8) targetZoom = 17.2; // très lent / pause -> zoom fort
+          else if (kmh < 15) targetZoom = 16.6; // balade tranquille
+          else if (kmh < 25) targetZoom = 15.8; // rythme soutenu
+          else targetZoom = 15.2; // très rapide -> on dézoome un peu
+        } else {
+          // no speed: départ / GPS poor
+          targetZoom = 16.8;
+        }
+
+        // contexte manœuvre : on zoome un peu plus proche du prochain virage
+        if (distToNext < 60) targetZoom += 0.6;
+        else if (distToNext < 120) targetZoom += 0.3;
+
+        // bornes hard pour éviter les trucs extrêmes
+        targetZoom = Math.max(13.5, Math.min(18, targetZoom));
+
+        // lissage (interpolation) pour éviter les sauts
+        const SMOOTH = 0.25;
+        setMapZoom((prev) => prev + (targetZoom - prev) * SMOOTH);
+      }
+
+      // Off-route entered => vibrate + notif (throttled)
       if (isOff && !wasOff) {
         offRouteRef.current = true;
 
@@ -312,7 +437,9 @@ export default function MapScreen() {
           lastOffRouteBuzzAtRef.current = now;
           try {
             await Haptics.notification({ type: NotificationType.Warning });
-          } catch { }
+          } catch {
+            /* noop */
+          }
         }
 
         if (now - lastOffRouteNotifAtRef.current > 15000) {
@@ -328,7 +455,9 @@ export default function MapScreen() {
                 },
               ],
             });
-          } catch { }
+          } catch {
+            /* noop */
+          }
         }
       }
 
@@ -337,25 +466,33 @@ export default function MapScreen() {
         offRouteRef.current = false;
       }
 
-      // 2) Instruction changed => small haptic (throttled)
+      // Instruction changed => small haptic (throttled)
       if (instr && instr !== lastInstrRef.current && distToNext <= 250) {
         const now = Date.now();
         if (now - lastInstrBuzzAtRef.current > 3500) {
           lastInstrBuzzAtRef.current = now;
           lastInstrRef.current = instr;
           try {
-            await Haptics.impact({ style: "light" as any });
-          } catch { }
+            await Haptics.impact({ style: ImpactStyle.Light });
+          } catch {
+            /* noop */
+          }
         }
       }
 
       // Arrivé
       if (rem < 25) {
+        if (navStartAtRef.current != null) {
+          const elapsedSec = (Date.now() - navStartAtRef.current) / 1000;
+          setNavActualDurationSec(elapsedSec);
+        }
+        setHasArrived(true);
+
         stopNavigation();
         return;
       }
 
-      // Reroute (utilise l'état stable + garde-fou accuracy)
+      // Reroute (stable + accuracy)
       const ACC_OK = accGps < GPS_MAX_ACC_FOR_REROUTE;
       const COOLDOWN_MS = 12000;
 
@@ -368,17 +505,93 @@ export default function MapScreen() {
       if (offRouteStreakRef.current >= 2 && canReroute && destination) {
         lastRerouteAtRef.current = now;
         offRouteStreakRef.current = 0;
+
+        // 👉 toast UX: nouvel itinéraire calculé
+        setRerouteBannerLabel(destination.label);
+
         await calculateTo(destination);
       }
     });
+  }, [destination, selected, fix, nav, setFix, calculateTo, stopNavigation]);
 
-  }
+  // 🔁 Restauration d'une session de nav persistée
+  useEffect(() => {
+    if (hasRestoredSessionRef.current) return;
+    if (!fix) return;
+
+    const session = loadNavSession();
+    if (!session) return;
+
+    hasRestoredSessionRef.current = true;
+
+    const dest: SelectedDestination = session.destination;
+    setDestination(dest);
+    setQ(dest.label);
+
+    void (async () => {
+      await calculateTo(dest);
+      const selectedNow = useRoutingStore.getState().selected();
+      if (selectedNow && !useNavigationStore.getState().isNavigating) {
+        startNavigation();
+        setResumeBannerLabel(dest.label);
+      }
+    })();
+  }, [fix, calculateTo, startNavigation]);
+
+  // Auto-hide du toast "navigation reprise"
+  useEffect(() => {
+    if (!resumeBannerLabel) return;
+    const t = window.setTimeout(() => setResumeBannerLabel(null), 7000);
+    return () => window.clearTimeout(t);
+  }, [resumeBannerLabel]);
+
+  // Auto-hide du toast "nouvel itinéraire"
+  useEffect(() => {
+    if (!rerouteBannerLabel) return;
+    const t = window.setTimeout(() => setRerouteBannerLabel(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [rerouteBannerLabel]);
+
+  // Si on sort de la nav, on ramène doucement le zoom vers un niveau neutre
+  useEffect(() => {
+    if (isNavigating) return;
+    setMapZoom((prev) => {
+      const target = 16;
+      const SMOOTH = 0.3;
+      return prev + (target - prev) * SMOOTH;
+    });
+  }, [isNavigating]);
+
+    // Auto-start navigation quand autoRouting est actif
+  useEffect(() => {
+    if (!pendingAutoStartRef.current) return;
+    if (routing.loading) return;
+    if (!destination || !selected || !fix) return;
+    if (isNavigating) {
+      // déjà en nav (ou user a démarré à la main)
+      pendingAutoStartRef.current = false;
+      return;
+    }
+
+    pendingAutoStartRef.current = false;
+    startNavigation();
+  }, [routing.loading, destination, selected, fix, isNavigating, startNavigation]);
+
 
   const showResults = results.length > 0 && !isNavigating;
 
-  // ✅ tu peux jouer avec ça (tu m’as dit que -60px te convenait)
   const BOTTOM_EXTRA_PX = -60;
 
+  // GPS quality pill
+  const gpsQuality = gpsQualityFromAccuracy(fix?.accuracy);
+  const gpsAccMeters =
+    typeof fix?.accuracy === "number" && Number.isFinite(fix.accuracy)
+      ? Math.round(fix.accuracy)
+      : null;
+
+  // durée réelle formatée (si dispo)
+  const actualDurationLabel =
+    navActualDurationSec != null ? formatDuration(navActualDurationSec) : null;
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black touch-none">
@@ -393,7 +606,7 @@ export default function MapScreen() {
             destination={destination?.center ?? null}
             selectedRoute={selected?.geometry ?? null}
             alternativeRoutes={altRoutes}
-            zoom={15}
+            zoom={mapZoom}
           />
         ) : (
           <div className="h-full w-full flex items-center justify-center">
@@ -405,80 +618,146 @@ export default function MapScreen() {
       {/* TOP OVERLAY */}
       <div className="absolute left-0 right-0 top-0 z-10 p-3 pt-4 space-y-2">
         <div className="mx-auto max-w-xl space-y-2">
+          {/* Toast de reprise de navigation */}
+          {resumeBannerLabel && (
+            <div className="rounded-2xl border border-sky-500/40 bg-sky-500/10 text-sky-100 px-3 py-2 text-xs flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span>🧭</span>
+                <span className="truncate">
+                  Navigation reprise vers{" "}
+                  <span className="font-semibold">{resumeBannerLabel}</span>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResumeBannerLabel(null)}
+                className="text-[11px] text-sky-100/80 hover:text-sky-50 shrink-0"
+              >
+                OK
+              </button>
+            </div>
+          )}
+
+          {/* Toast reroute automatique */}
+          {rerouteBannerLabel && (
+            <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 text-amber-100 px-3 py-2 text-xs flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span>🔄</span>
+                <span className="truncate">
+                  Nouvel itinéraire calculé vers{" "}
+                  <span className="font-semibold">{rerouteBannerLabel}</span>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRerouteBannerLabel(null)}
+                className="text-[11px] text-amber-100/80 hover:text-amber-50 shrink-0"
+              >
+                OK
+              </button>
+            </div>
+          )}
+
           <NavBanner />
 
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 backdrop-blur px-3 py-2 shadow-lg">
-            <div className="flex items-center gap-2">
-              <div className="text-xs text-zinc-400 shrink-0">Destination</div>
+          {/* 🧼 En mode navigation, on masque le panneau de recherche pour libérer la carte */}
+          {!isNavigating && (
+            <>
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 backdrop-blur px-3 py-2 shadow-lg">
+                <div className="flex items-center gap-2">
+                  <div className="text-xs text-zinc-400 shrink-0">Destination</div>
 
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void runSearch();
-                  }
-                }}
-                disabled={isNavigating}
-                placeholder="Où on va ? (adresse, lieu, POI)"
-                className="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 outline-none"
-              />
+                  <input
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void runSearch();
+                      }
+                    }}
+                    disabled={isNavigating}
+                    placeholder="Où on va ? (adresse, lieu, POI)"
+                    className="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 outline-none"
+                  />
 
-              {searchLoading ? (
-                <div className="text-xs text-zinc-400">…</div>
-              ) : (
-                <button
-                  onClick={() => void runSearch()}
-                  disabled={!q.trim() || isNavigating}
-                  className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40 disabled:opacity-50"
-                >
-                  Chercher
-                </button>
-              )}
-
-              {destination && (
-                <button
-                  onClick={clearDestination}
-                  className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40"
-                >
-                  Effacer
-                </button>
-              )}
-            </div>
-
-            {destination && (
-              <div className="mt-2 text-xs text-zinc-300">
-                <span className="text-zinc-400">Sélectionné :</span>{" "}
-                <span className="font-semibold text-zinc-100">{destination.label}</span>
-              </div>
-            )}
-
-            {searchError && <div className="mt-2 text-xs text-red-300">{searchError}</div>}
-            {error && <div className="mt-2 text-xs text-red-300">{error}</div>}
-            {permission !== "granted" && (
-              <div className="mt-2 text-xs text-zinc-400">
-                Permission localisation: <span className="text-zinc-200">{permission}</span>
-              </div>
-            )}
-          </div>
-
-          {showResults && (
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 backdrop-blur shadow-lg overflow-hidden">
-              {results.slice(0, 6).map((r) => (
-                <div key={r.id} className="px-3 py-2 border-b border-zinc-900 last:border-b-0">
-                  <div className="text-sm text-zinc-100">{r.label}</div>
-                  <div className="mt-2 flex justify-end">
+                  {searchLoading ? (
+                    <div className="text-xs text-zinc-400">…</div>
+                  ) : (
                     <button
-                      onClick={() => useAsDestination(r)}
+                      onClick={() => void runSearch()}
+                      disabled={!q.trim() || isNavigating}
+                      className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40 disabled:opacity-50"
+                    >
+                      Chercher
+                    </button>
+                  )}
+
+                  {destination && (
+                    <button
+                      onClick={clearDestination}
                       className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40"
                     >
-                      Utiliser comme destination
+                      Effacer
                     </button>
+                  )}
+                </div>
+
+                {/* Ligne infos: destination + GPS */}
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <div className="text-xs text-zinc-300 min-w-0">
+                    {destination ? (
+                      <>
+                        <span className="text-zinc-400">Sélectionné :</span>{" "}
+                        <span className="font-semibold text-zinc-100 truncate inline-block max-w-[12rem]">
+                          {destination.label}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-zinc-500">Choisis une adresse pour commencer</span>
+                    )}
+                  </div>
+
+                  {/* Pastille GPS */}
+                  <div
+                    className={[
+                      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                      gpsPillClass(gpsQuality),
+                    ].join(" ")}
+                  >
+                    <span className="uppercase tracking-wide">GPS</span>
+                    <span>{gpsLabel(gpsQuality)}</span>
+                    {gpsAccMeters != null && <span className="opacity-70">(~{gpsAccMeters} m)</span>}
                   </div>
                 </div>
-              ))}
-            </div>
+
+                {searchError && <div className="mt-2 text-xs text-red-300">{searchError}</div>}
+                {error && <div className="mt-2 text-xs text-red-300">{error}</div>}
+                {permission !== "granted" && (
+                  <div className="mt-2 text-xs text-zinc-400">
+                    Permission localisation: <span className="text-zinc-200">{permission}</span>
+                  </div>
+                )}
+              </div>
+
+              {showResults && (
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 backdrop-blur shadow-lg overflow-hidden">
+                  {results.slice(0, 6).map((r) => (
+                    <div key={r.id} className="px-3 py-2 border-b border-zinc-900 last:border-b-0">
+                      <div className="text-sm text-zinc-100">{r.label}</div>
+                      <div className="mt-2 flex justify-end">
+                        <button
+                          onClick={() => setAsDestination(r)}
+                          className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40"
+                        >
+                          Utiliser comme destination
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -492,8 +771,58 @@ export default function MapScreen() {
       >
         <div className="mx-auto max-w-xl">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 backdrop-blur shadow-lg p-3 space-y-3">
+            {/* Panneau d'arrivée */}
+            {hasArrived && (
+              <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-3 text-xs text-emerald-50 flex items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span>✅</span>
+                    <span className="text-sm font-semibold">Arrivé à destination</span>
+                  </div>
+                  <div className="text-[11px] text-emerald-100/90 truncate">
+                    {destination?.label ?? "Destination atteinte"}
+                  </div>
+                  <div className="text-[11px] text-emerald-100/90">
+                    Itinéraire:{" "}
+                    <span className="font-semibold">
+                      {selected
+                        ? `${formatDistance(selected.summary.distanceMeters)} • ${formatDuration(
+                          selected.summary.durationSeconds
+                        )}`
+                        : "—"}
+                    </span>
+                  </div>
+                  {actualDurationLabel && (
+                    <div className="text-[11px] text-emerald-100/90">
+                      Temps réel approximatif:{" "}
+                      <span className="font-semibold">{actualDurationLabel}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setHasArrived(false)}
+                    className="rounded-xl border border-emerald-400/60 bg-emerald-500/20 px-3 py-1.5 text-[11px] hover:bg-emerald-500/30"
+                  >
+                    Fermer
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearDestination}
+                    className="rounded-xl border border-zinc-700 bg-zinc-900/80 px-3 py-1.5 text-[11px] text-zinc-100 hover:bg-zinc-800"
+                  >
+                    Nouvelle destination
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
-              <div className="text-sm text-zinc-200">{isNavigating ? "Navigation active" : "Prêt"}</div>
+              <div className="text-sm text-zinc-200">
+                {isNavigating ? "Navigation active" : hasArrived ? "Arrivé" : "Prêt"}
+              </div>
             </div>
 
             {/* Polished toggles */}
@@ -517,7 +846,10 @@ export default function MapScreen() {
                 <div className="flex min-w-0 items-center gap-3">
                   <span className={autoRouting ? "text-sky-200" : "text-zinc-300"}>🧭</span>
                   <div className="min-w-0 leading-none">
-                    <div className={autoRouting ? "text-sky-100" : "text-zinc-100"} style={{ fontSize: 12, fontWeight: 700 }}>
+                    <div
+                      className={autoRouting ? "text-sky-100" : "text-zinc-100"}
+                      style={{ fontSize: 12, fontWeight: 700 }}
+                    >
                       Auto-route
                     </div>
                     <div className="mt-1 text-[11px] text-zinc-400 truncate">Calcule à la sélection</div>
@@ -560,7 +892,10 @@ export default function MapScreen() {
                 <div className="flex min-w-0 items-center gap-3">
                   <span className={navFollowUser ? "text-emerald-200" : "text-zinc-300"}>🎯</span>
                   <div className="min-w-0 leading-none">
-                    <div className={navFollowUser ? "text-emerald-100" : "text-zinc-100"} style={{ fontSize: 12, fontWeight: 700 }}>
+                    <div
+                      className={navFollowUser ? "text-emerald-100" : "text-zinc-100"}
+                      style={{ fontSize: 12, fontWeight: 700 }}
+                    >
                       Suivre
                     </div>
                     <div className="mt-1 text-[11px] text-zinc-400 truncate">Caméra sur toi</div>
@@ -609,43 +944,74 @@ export default function MapScreen() {
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 space-y-1">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-zinc-100 font-semibold">
-                    {formatDistance(selected.summary.distanceMeters)} • {formatDuration(selected.summary.durationSeconds)}
+                    {isNavigating
+                      ? "Itinéraire sélectionné"
+                      : `${formatDistance(selected.summary.distanceMeters)} • ${formatDuration(
+                        selected.summary.durationSeconds
+                      )}`}
                   </div>
                   <div className="text-xs text-zinc-400">
-                    Score <span className="text-zinc-100 font-semibold">{selected.safetyScore}</span>/100
+                    Score{" "}
+                    <span className="text-zinc-100 font-semibold">
+                      {selected.safetyScore}
+                    </span>
+                    /100
                   </div>
                 </div>
 
-                {isNavigating && (
-                  <>
-                    <div className="text-xs text-zinc-400">
-                      Restant:{" "}
-                      <span className="text-zinc-100 font-semibold">
-                        {remainingDistance != null ? formatDistance(remainingDistance) : "—"}
-                      </span>
-                      {" • "}
-                      ETA:{" "}
-                      <span className="text-zinc-100 font-semibold">
-                        {remainingDuration != null ? formatDuration(remainingDuration) : "—"}
-                      </span>
-                      {" • "}
-                      Écart:{" "}
-                      <span className={distanceToRoute != null && distanceToRoute > 35 ? "text-red-300" : "text-zinc-200"}>
-                        {distanceToRoute != null ? `${Math.round(distanceToRoute)} m` : "—"}
-                      </span>
-                    </div>
-
-                    {nextInstruction && (
-                      <div className="mt-2 text-sm text-zinc-100">
-                        Prochaine: <span className="font-semibold">{nextInstruction}</span>
-                      </div>
-                    )}
-                  </>
+                {isNavigating ? (
+                  // 🔎 En nav: on montre seulement l’écart (distance/ETA sont déjà dans NavBanner)
+                  <div className="text-xs text-zinc-400">
+                    Écart par rapport à l’itinéraire :{" "}
+                    <span
+                      className={
+                        distanceToRoute != null && distanceToRoute > 35
+                          ? "text-red-300"
+                          : "text-zinc-200"
+                      }
+                    >
+                      {distanceToRoute != null
+                        ? `${Math.round(distanceToRoute)} m`
+                        : "—"}
+                    </span>
+                  </div>
+                ) : (
+                  // 🧷 En preview: on montre tout
+                  <div className="text-xs text-zinc-400">
+                    Restant:{" "}
+                    <span className="text-zinc-100 font-semibold">
+                      {remainingDistance != null
+                        ? formatDistance(remainingDistance)
+                        : "—"}
+                    </span>
+                    {" • "}
+                    ETA:{" "}
+                    <span className="text-zinc-100 font-semibold">
+                      {remainingDuration != null
+                        ? formatDuration(remainingDuration)
+                        : "—"}
+                    </span>
+                    {" • "}
+                    Écart:{" "}
+                    <span
+                      className={
+                        distanceToRoute != null && distanceToRoute > 35
+                          ? "text-red-300"
+                          : "text-zinc-200"
+                      }
+                    >
+                      {distanceToRoute != null
+                        ? `${Math.round(distanceToRoute)} m`
+                        : "—"}
+                    </span>
+                  </div>
                 )}
               </div>
             ) : (
               <div className="text-xs text-zinc-400">
-                {destination ? "Sélectionne une destination puis calcule l’itinéraire." : "Choisis une destination."}
+                {destination
+                  ? "Sélectionne une destination puis calcule l’itinéraire."
+                  : "Choisis une destination."}
               </div>
             )}
           </div>
