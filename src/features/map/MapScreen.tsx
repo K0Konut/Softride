@@ -74,6 +74,10 @@ export default function MapScreen() {
   const routeAbortRef = useRef<AbortController | null>(null);
   const stopWatchRef = useRef<null | (() => void)>(null);
 
+
+  // auto-start nav après calcul si autoRouting est actif
+  const pendingAutoStartRef = useRef(false);
+
   // reroute logic
   const offRouteStreakRef = useRef(0);
   const lastRerouteAtRef = useRef(0);
@@ -212,15 +216,21 @@ export default function MapScreen() {
     [fix, routing]
   );
 
-  function setAsDestination(r: PlaceResult) {
+    function setAsDestination(r: PlaceResult) {
     const dest = { label: r.label, center: r.center };
     setDestination(dest);
     setResults([]);
     setQ(r.label);
 
-    if (autoRouting) void calculateTo(dest);
-    else routing.clear();
+    if (autoRouting) {
+      // on veut démarrer dès que le routing a fini
+      pendingAutoStartRef.current = true;
+      void calculateTo(dest);
+    } else {
+      routing.clear();
+    }
   }
+
 
   const stopNavigation = useCallback(() => {
     stopWatchRef.current?.();
@@ -552,6 +562,22 @@ export default function MapScreen() {
     });
   }, [isNavigating]);
 
+    // Auto-start navigation quand autoRouting est actif
+  useEffect(() => {
+    if (!pendingAutoStartRef.current) return;
+    if (routing.loading) return;
+    if (!destination || !selected || !fix) return;
+    if (isNavigating) {
+      // déjà en nav (ou user a démarré à la main)
+      pendingAutoStartRef.current = false;
+      return;
+    }
+
+    pendingAutoStartRef.current = false;
+    startNavigation();
+  }, [routing.loading, destination, selected, fix, isNavigating, startNavigation]);
+
+
   const showResults = results.length > 0 && !isNavigating;
 
   const BOTTOM_EXTRA_PX = -60;
@@ -761,8 +787,8 @@ export default function MapScreen() {
                     <span className="font-semibold">
                       {selected
                         ? `${formatDistance(selected.summary.distanceMeters)} • ${formatDuration(
-                            selected.summary.durationSeconds
-                          )}`
+                          selected.summary.durationSeconds
+                        )}`
                         : "—"}
                     </span>
                   </div>
@@ -813,8 +839,8 @@ export default function MapScreen() {
                   isNavigating
                     ? "cursor-not-allowed opacity-50 border-zinc-800 bg-zinc-950/40"
                     : autoRouting
-                    ? "border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/15"
-                    : "border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900/60",
+                      ? "border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/15"
+                      : "border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900/60",
                 ].join(" ")}
               >
                 <div className="flex min-w-0 items-center gap-3">
@@ -859,8 +885,8 @@ export default function MapScreen() {
                   !isNavigating
                     ? "cursor-not-allowed opacity-50 border-zinc-800 bg-zinc-950/40"
                     : navFollowUser
-                    ? "border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/15"
-                    : "border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900/60",
+                      ? "border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/15"
+                      : "border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900/60",
                 ].join(" ")}
               >
                 <div className="flex min-w-0 items-center gap-3">
@@ -913,13 +939,16 @@ export default function MapScreen() {
               </button>
             </div>
 
-                        {/* SUMMARY */}
+            {/* SUMMARY */}
             {selected ? (
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 space-y-1">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-zinc-100 font-semibold">
-                    {formatDistance(selected.summary.distanceMeters)} •{" "}
-                    {formatDuration(selected.summary.durationSeconds)}
+                    {isNavigating
+                      ? "Itinéraire sélectionné"
+                      : `${formatDistance(selected.summary.distanceMeters)} • ${formatDuration(
+                        selected.summary.durationSeconds
+                      )}`}
                   </div>
                   <div className="text-xs text-zinc-400">
                     Score{" "}
@@ -930,8 +959,8 @@ export default function MapScreen() {
                   </div>
                 </div>
 
-                {/* 👉 En preview on montre tout, en nav on ne garde que l'écart */}
                 {isNavigating ? (
+                  // 🔎 En nav: on montre seulement l’écart (distance/ETA sont déjà dans NavBanner)
                   <div className="text-xs text-zinc-400">
                     Écart par rapport à l’itinéraire :{" "}
                     <span
@@ -947,6 +976,7 @@ export default function MapScreen() {
                     </span>
                   </div>
                 ) : (
+                  // 🧷 En preview: on montre tout
                   <div className="text-xs text-zinc-400">
                     Restant:{" "}
                     <span className="text-zinc-100 font-semibold">
@@ -984,7 +1014,6 @@ export default function MapScreen() {
                   : "Choisis une destination."}
               </div>
             )}
-
           </div>
         </div>
       </div>
