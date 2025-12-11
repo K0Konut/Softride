@@ -66,9 +66,7 @@ export default function FallDebugPanel() {
     if (!debugOn) {
       listenerRef.current?.remove();
       listenerRef.current = null;
-      setGMag(null);
-      setGyroMag(null);
-      setHz(null);
+      // On laisse les dernières valeurs affichées, pas de reset de state ici
       return;
     }
 
