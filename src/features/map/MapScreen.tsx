@@ -93,6 +93,9 @@ export default function MapScreen() {
   // restore guard
   const hasRestoredSessionRef = useRef(false);
 
+  // UX: toast "navigation reprise"
+  const [resumeBannerLabel, setResumeBannerLabel] = useState<string | null>(null);
+
   // seuils GPS
   const GPS_MAX_ACC_FOR_SNAP = 55; // au-delà, on limite le snap
   const GPS_MAX_ACC_FOR_OFFROUTE = 60; // au-delà, on ne change pas l'état offRoute
@@ -227,6 +230,7 @@ export default function MapScreen() {
 
     // on ne garde pas de session "inactive"
     saveNavSession(null);
+    setResumeBannerLabel(null);
   }, [nav]);
 
   function clearDestination() {
@@ -246,6 +250,7 @@ export default function MapScreen() {
 
     // efface toute session nav persistée
     saveNavSession(null);
+    setResumeBannerLabel(null);
   }
 
   const startNavigation = useCallback(() => {
@@ -461,9 +466,17 @@ export default function MapScreen() {
       const selectedNow = useRoutingStore.getState().selected();
       if (selectedNow && !useNavigationStore.getState().isNavigating) {
         startNavigation();
+        setResumeBannerLabel(dest.label);
       }
     })();
   }, [fix, calculateTo, startNavigation]);
+
+  // Auto-hide du toast "navigation reprise"
+  useEffect(() => {
+    if (!resumeBannerLabel) return;
+    const t = window.setTimeout(() => setResumeBannerLabel(null), 7000);
+    return () => window.clearTimeout(t);
+  }, [resumeBannerLabel]);
 
   const showResults = results.length > 0 && !isNavigating;
 
@@ -501,6 +514,26 @@ export default function MapScreen() {
       {/* TOP OVERLAY */}
       <div className="absolute left-0 right-0 top-0 z-10 p-3 pt-4 space-y-2">
         <div className="mx-auto max-w-xl space-y-2">
+          {/* Toast de reprise de navigation */}
+          {resumeBannerLabel && (
+            <div className="rounded-2xl border border-sky-500/40 bg-sky-500/10 text-sky-100 px-3 py-2 text-xs flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span>🧭</span>
+                <span className="truncate">
+                  Navigation reprise vers{" "}
+                  <span className="font-semibold">{resumeBannerLabel}</span>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResumeBannerLabel(null)}
+                className="text-[11px] text-sky-100/80 hover:text-sky-50 shrink-0"
+              >
+                OK
+              </button>
+            </div>
+          )}
+
           <NavBanner />
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 backdrop-blur px-3 py-2 shadow-lg">
