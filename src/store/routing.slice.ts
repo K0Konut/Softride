@@ -55,9 +55,11 @@ export const useRoutingStore = create<RoutingState>((set, get) => ({
         candidates: res.all,
         selectedId: res.best.id,
       });
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const maybe = e as { name?: string } | null;
+
       // Abort: pas une “vraie erreur” UI
-      if (e?.name === "AbortError") return;
+      if (maybe?.name === "AbortError") return;
 
       if (get().activeRequestId !== requestId) return;
 
