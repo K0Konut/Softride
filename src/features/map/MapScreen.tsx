@@ -99,6 +99,11 @@ export default function MapScreen() {
   // UX: toast "nouvel itinéraire calculé"
   const [rerouteBannerLabel, setRerouteBannerLabel] = useState<string | null>(null);
 
+  // UX: arrivée
+  const [hasArrived, setHasArrived] = useState(false);
+  const [navActualDurationSec, setNavActualDurationSec] = useState<number | null>(null);
+  const navStartAtRef = useRef<number | null>(null);
+
   // seuils GPS
   const GPS_MAX_ACC_FOR_SNAP = 55; // au-delà, on limite le snap
   const GPS_MAX_ACC_FOR_OFFROUTE = 60; // au-delà, on ne change pas l'état offRoute
@@ -231,6 +236,10 @@ export default function MapScreen() {
     setRemainingDuration(null);
     setNextInstruction(null);
 
+    navStartAtRef.current = null;
+    setHasArrived(false);
+    setNavActualDurationSec(null);
+
     // on ne garde pas de session "inactive"
     saveNavSession(null);
     setResumeBannerLabel(null);
@@ -262,6 +271,11 @@ export default function MapScreen() {
     if (!destination || !selected || !fix) return;
 
     nav.start(); // followUser = true dans le store
+
+    // départ de session nav
+    navStartAtRef.current = Date.now();
+    setHasArrived(false);
+    setNavActualDurationSec(null);
 
     // persiste la session de nav
     saveNavSession({
@@ -430,6 +444,13 @@ export default function MapScreen() {
 
       // Arrivé
       if (rem < 25) {
+        // on capture une durée "réelle" approximative
+        if (navStartAtRef.current != null) {
+          const elapsedSec = (Date.now() - navStartAtRef.current) / 1000;
+          setNavActualDurationSec(elapsedSec);
+        }
+        setHasArrived(true);
+
         stopNavigation();
         return;
       }
@@ -504,6 +525,10 @@ export default function MapScreen() {
     typeof fix?.accuracy === "number" && Number.isFinite(fix.accuracy)
       ? Math.round(fix.accuracy)
       : null;
+
+  // durée réelle formatée (si dispo)
+  const actualDurationLabel =
+    navActualDurationSec != null ? formatDuration(navActualDurationSec) : null;
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black touch-none">
@@ -678,8 +703,58 @@ export default function MapScreen() {
       >
         <div className="mx-auto max-w-xl">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 backdrop-blur shadow-lg p-3 space-y-3">
+            {/* Panneau d'arrivée */}
+            {hasArrived && (
+              <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-3 text-xs text-emerald-50 flex items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span>✅</span>
+                    <span className="text-sm font-semibold">Arrivé à destination</span>
+                  </div>
+                  <div className="text-[11px] text-emerald-100/90 truncate">
+                    {destination?.label ?? "Destination atteinte"}
+                  </div>
+                  <div className="text-[11px] text-emerald-100/90">
+                    Itinéraire:{" "}
+                    <span className="font-semibold">
+                      {selected
+                        ? `${formatDistance(selected.summary.distanceMeters)} • ${formatDuration(
+                            selected.summary.durationSeconds
+                          )}`
+                        : "—"}
+                    </span>
+                  </div>
+                  {actualDurationLabel && (
+                    <div className="text-[11px] text-emerald-100/90">
+                      Temps réel approximatif:{" "}
+                      <span className="font-semibold">{actualDurationLabel}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setHasArrived(false)}
+                    className="rounded-xl border border-emerald-400/60 bg-emerald-500/20 px-3 py-1.5 text-[11px] hover:bg-emerald-500/30"
+                  >
+                    Fermer
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearDestination}
+                    className="rounded-xl border border-zinc-700 bg-zinc-900/80 px-3 py-1.5 text-[11px] text-zinc-100 hover:bg-zinc-800"
+                  >
+                    Nouvelle destination
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
-              <div className="text-sm text-zinc-200">{isNavigating ? "Navigation active" : "Prêt"}</div>
+              <div className="text-sm text-zinc-200">
+                {isNavigating ? "Navigation active" : hasArrived ? "Arrivé" : "Prêt"}
+              </div>
             </div>
 
             {/* Polished toggles */}
