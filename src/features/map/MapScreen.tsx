@@ -96,6 +96,9 @@ export default function MapScreen() {
   // UX: toast "navigation reprise"
   const [resumeBannerLabel, setResumeBannerLabel] = useState<string | null>(null);
 
+  // UX: toast "nouvel itinéraire calculé"
+  const [rerouteBannerLabel, setRerouteBannerLabel] = useState<string | null>(null);
+
   // seuils GPS
   const GPS_MAX_ACC_FOR_SNAP = 55; // au-delà, on limite le snap
   const GPS_MAX_ACC_FOR_OFFROUTE = 60; // au-delà, on ne change pas l'état offRoute
@@ -231,6 +234,7 @@ export default function MapScreen() {
     // on ne garde pas de session "inactive"
     saveNavSession(null);
     setResumeBannerLabel(null);
+    setRerouteBannerLabel(null);
   }, [nav]);
 
   function clearDestination() {
@@ -251,6 +255,7 @@ export default function MapScreen() {
     // efface toute session nav persistée
     saveNavSession(null);
     setResumeBannerLabel(null);
+    setRerouteBannerLabel(null);
   }
 
   const startNavigation = useCallback(() => {
@@ -442,6 +447,10 @@ export default function MapScreen() {
       if (offRouteStreakRef.current >= 2 && canReroute && destination) {
         lastRerouteAtRef.current = now;
         offRouteStreakRef.current = 0;
+
+        // 👉 toast UX: nouvel itinéraire calculé
+        setRerouteBannerLabel(destination.label);
+
         await calculateTo(destination);
       }
     });
@@ -477,6 +486,13 @@ export default function MapScreen() {
     const t = window.setTimeout(() => setResumeBannerLabel(null), 7000);
     return () => window.clearTimeout(t);
   }, [resumeBannerLabel]);
+
+  // Auto-hide du toast "nouvel itinéraire"
+  useEffect(() => {
+    if (!rerouteBannerLabel) return;
+    const t = window.setTimeout(() => setRerouteBannerLabel(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [rerouteBannerLabel]);
 
   const showResults = results.length > 0 && !isNavigating;
 
@@ -528,6 +544,26 @@ export default function MapScreen() {
                 type="button"
                 onClick={() => setResumeBannerLabel(null)}
                 className="text-[11px] text-sky-100/80 hover:text-sky-50 shrink-0"
+              >
+                OK
+              </button>
+            </div>
+          )}
+
+          {/* Toast reroute automatique */}
+          {rerouteBannerLabel && (
+            <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 text-amber-100 px-3 py-2 text-xs flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span>🔄</span>
+                <span className="truncate">
+                  Nouvel itinéraire calculé vers{" "}
+                  <span className="font-semibold">{rerouteBannerLabel}</span>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRerouteBannerLabel(null)}
+                className="text-[11px] text-amber-100/80 hover:text-amber-50 shrink-0"
               >
                 OK
               </button>
