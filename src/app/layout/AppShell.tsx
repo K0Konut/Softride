@@ -9,6 +9,13 @@ export default function AppShell() {
   const { pathname } = useLocation();
   const isMap = pathname === "/map";
 
+  const navHeight = "calc(72px + env(safe-area-inset-bottom))";
+
+  const navStyle: React.CSSProperties & Record<"--bottom-nav-h", string> = {
+    height: navHeight,
+    "--bottom-nav-h": navHeight,
+  };
+
   return (
     <div className="h-[100dvh] w-full bg-zinc-950 text-zinc-100 overflow-hidden flex flex-col">
       {/* MAIN (scrollable only when NOT map) */}
@@ -32,13 +39,10 @@ export default function AppShell() {
         <Outlet />
       </main>
 
-      {/* NAV (NOT fixed anymore) */}
+      {/* NAV */}
       <nav
         className="shrink-0 border-t border-zinc-800 bg-zinc-950/90 backdrop-blur"
-        style={{
-          height: "calc(72px + env(safe-area-inset-bottom))",
-          ["--bottom-nav-h" as any]: "calc(72px + env(safe-area-inset-bottom))",
-        }}
+        style={navStyle}
       >
         <div className="mx-auto flex h-[72px] max-w-screen-sm items-stretch justify-around px-2 py-2">
           <NavLink
