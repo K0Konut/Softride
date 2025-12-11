@@ -70,7 +70,6 @@ export default function MapScreen() {
   const [distanceToRoute, setDistanceToRoute] = useState<number | null>(null);
   const [remainingDistance, setRemainingDistance] = useState<number | null>(null);
   const [remainingDuration, setRemainingDuration] = useState<number | null>(null);
-  const [nextInstruction, setNextInstruction] = useState<string | null>(null);
 
   const routeAbortRef = useRef<AbortController | null>(null);
   const stopWatchRef = useRef<null | (() => void)>(null);
@@ -237,7 +236,6 @@ export default function MapScreen() {
     setDistanceToRoute(null);
     setRemainingDistance(null);
     setRemainingDuration(null);
-    setNextInstruction(null);
 
     navStartAtRef.current = null;
     setHasArrived(false);
@@ -260,7 +258,6 @@ export default function MapScreen() {
     setDistanceToRoute(null);
     setRemainingDistance(null);
     setRemainingDuration(null);
-    setNextInstruction(null);
 
     nav.reset();
 
@@ -384,7 +381,6 @@ export default function MapScreen() {
         setDistanceToRoute(distance);
         setRemainingDistance(rem);
         setRemainingDuration(etaSec);
-        setNextInstruction(instr);
 
         nav.update({
           remainingDistance: rem,
@@ -638,99 +634,104 @@ export default function MapScreen() {
 
           <NavBanner />
 
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 backdrop-blur px-3 py-2 shadow-lg">
-            <div className="flex items-center gap-2">
-              <div className="text-xs text-zinc-400 shrink-0">Destination</div>
+          {/* 🧼 En mode navigation, on masque le panneau de recherche pour libérer la carte */}
+          {!isNavigating && (
+            <>
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 backdrop-blur px-3 py-2 shadow-lg">
+                <div className="flex items-center gap-2">
+                  <div className="text-xs text-zinc-400 shrink-0">Destination</div>
 
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void runSearch();
-                  }
-                }}
-                disabled={isNavigating}
-                placeholder="Où on va ? (adresse, lieu, POI)"
-                className="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 outline-none"
-              />
+                  <input
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void runSearch();
+                      }
+                    }}
+                    disabled={isNavigating}
+                    placeholder="Où on va ? (adresse, lieu, POI)"
+                    className="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 outline-none"
+                  />
 
-              {searchLoading ? (
-                <div className="text-xs text-zinc-400">…</div>
-              ) : (
-                <button
-                  onClick={() => void runSearch()}
-                  disabled={!q.trim() || isNavigating}
-                  className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40 disabled:opacity-50"
-                >
-                  Chercher
-                </button>
-              )}
+                  {searchLoading ? (
+                    <div className="text-xs text-zinc-400">…</div>
+                  ) : (
+                    <button
+                      onClick={() => void runSearch()}
+                      disabled={!q.trim() || isNavigating}
+                      className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40 disabled:opacity-50"
+                    >
+                      Chercher
+                    </button>
+                  )}
 
-              {destination && (
-                <button
-                  onClick={clearDestination}
-                  className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40"
-                >
-                  Effacer
-                </button>
-              )}
-            </div>
+                  {destination && (
+                    <button
+                      onClick={clearDestination}
+                      className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40"
+                    >
+                      Effacer
+                    </button>
+                  )}
+                </div>
 
-            {/* Ligne infos: destination + GPS */}
-            <div className="mt-2 flex items-center justify-between gap-2">
-              <div className="text-xs text-zinc-300 min-w-0">
-                {destination ? (
-                  <>
-                    <span className="text-zinc-400">Sélectionné :</span>{" "}
-                    <span className="font-semibold text-zinc-100 truncate inline-block max-w-[12rem]">
-                      {destination.label}
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-zinc-500">Choisis une adresse pour commencer</span>
+                {/* Ligne infos: destination + GPS */}
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <div className="text-xs text-zinc-300 min-w-0">
+                    {destination ? (
+                      <>
+                        <span className="text-zinc-400">Sélectionné :</span>{" "}
+                        <span className="font-semibold text-zinc-100 truncate inline-block max-w-[12rem]">
+                          {destination.label}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-zinc-500">Choisis une adresse pour commencer</span>
+                    )}
+                  </div>
+
+                  {/* Pastille GPS */}
+                  <div
+                    className={[
+                      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                      gpsPillClass(gpsQuality),
+                    ].join(" ")}
+                  >
+                    <span className="uppercase tracking-wide">GPS</span>
+                    <span>{gpsLabel(gpsQuality)}</span>
+                    {gpsAccMeters != null && <span className="opacity-70">(~{gpsAccMeters} m)</span>}
+                  </div>
+                </div>
+
+                {searchError && <div className="mt-2 text-xs text-red-300">{searchError}</div>}
+                {error && <div className="mt-2 text-xs text-red-300">{error}</div>}
+                {permission !== "granted" && (
+                  <div className="mt-2 text-xs text-zinc-400">
+                    Permission localisation: <span className="text-zinc-200">{permission}</span>
+                  </div>
                 )}
               </div>
 
-              {/* Pastille GPS */}
-              <div
-                className={[
-                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
-                  gpsPillClass(gpsQuality),
-                ].join(" ")}
-              >
-                <span className="uppercase tracking-wide">GPS</span>
-                <span>{gpsLabel(gpsQuality)}</span>
-                {gpsAccMeters != null && <span className="opacity-70">(~{gpsAccMeters} m)</span>}
-              </div>
-            </div>
-
-            {searchError && <div className="mt-2 text-xs text-red-300">{searchError}</div>}
-            {error && <div className="mt-2 text-xs text-red-300">{error}</div>}
-            {permission !== "granted" && (
-              <div className="mt-2 text-xs text-zinc-400">
-                Permission localisation: <span className="text-zinc-200">{permission}</span>
-              </div>
-            )}
-          </div>
-
-          {showResults && (
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 backdrop-blur shadow-lg overflow-hidden">
-              {results.slice(0, 6).map((r) => (
-                <div key={r.id} className="px-3 py-2 border-b border-zinc-900 last:border-b-0">
-                  <div className="text-sm text-zinc-100">{r.label}</div>
-                  <div className="mt-2 flex justify-end">
-                    <button
-                      onClick={() => setAsDestination(r)}
-                      className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40"
-                    >
-                      Utiliser comme destination
-                    </button>
-                  </div>
+              {showResults && (
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 backdrop-blur shadow-lg overflow-hidden">
+                  {results.slice(0, 6).map((r) => (
+                    <div key={r.id} className="px-3 py-2 border-b border-zinc-900 last:border-b-0">
+                      <div className="text-sm text-zinc-100">{r.label}</div>
+                      <div className="mt-2 flex justify-end">
+                        <button
+                          onClick={() => setAsDestination(r)}
+                          className="rounded-xl border border-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/40"
+                        >
+                          Utiliser comme destination
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -926,34 +927,27 @@ export default function MapScreen() {
                 </div>
 
                 {isNavigating && (
-                  <>
-                    <div className="text-xs text-zinc-400">
-                      Restant:{" "}
-                      <span className="text-zinc-100 font-semibold">
-                        {remainingDistance != null ? formatDistance(remainingDistance) : "—"}
-                      </span>
-                      {" • "}
-                      ETA:{" "}
-                      <span className="text-zinc-100 font-semibold">
-                        {remainingDuration != null ? formatDuration(remainingDuration) : "—"}
-                      </span>
-                      {" • "}
-                      Écart:{" "}
-                      <span
-                        className={
-                          distanceToRoute != null && distanceToRoute > 35 ? "text-red-300" : "text-zinc-200"
-                        }
-                      >
-                        {distanceToRoute != null ? `${Math.round(distanceToRoute)} m` : "—"}
-                      </span>
-                    </div>
-
-                    {nextInstruction && (
-                      <div className="mt-2 text-sm text-zinc-100">
-                        Prochaine: <span className="font-semibold">{nextInstruction}</span>
-                      </div>
-                    )}
-                  </>
+                  <div className="text-xs text-zinc-400">
+                    Restant:{" "}
+                    <span className="text-zinc-100 font-semibold">
+                      {remainingDistance != null ? formatDistance(remainingDistance) : "—"}
+                    </span>
+                    {" • "}
+                    ETA:{" "}
+                    <span className="text-zinc-100 font-semibold">
+                      {remainingDuration != null ? formatDuration(remainingDuration) : "—"}
+                    </span>
+                    {" • "}
+                    Écart:{" "}
+                    <span
+                      className={
+                        distanceToRoute != null && distanceToRoute > 35 ? "text-red-300" : "text-zinc-200"
+                      }
+                    >
+                      {distanceToRoute != null ? `${Math.round(distanceToRoute)} m` : "—"}
+                    </span>
+                  </div>
+                  // 👉 on ne répète plus nextInstruction ici, c'est NavBanner qui fait foi
                 )}
               </div>
             ) : (
