@@ -104,6 +104,9 @@ export default function MapScreen() {
   const [navActualDurationSec, setNavActualDurationSec] = useState<number | null>(null);
   const navStartAtRef = useRef<number | null>(null);
 
+  // 🧭 Dynamic map zoom
+  const [mapZoom, setMapZoom] = useState<number>(16);
+
   // seuils GPS
   const GPS_MAX_ACC_FOR_SNAP = 55; // au-delà, on limite le snap
   const GPS_MAX_ACC_FOR_OFFROUTE = 60; // au-delà, on ne change pas l'état offRoute
@@ -244,6 +247,9 @@ export default function MapScreen() {
     saveNavSession(null);
     setResumeBannerLabel(null);
     setRerouteBannerLabel(null);
+
+    // reset zoom doux
+    setMapZoom(16);
   }, [nav]);
 
   function clearDestination() {
@@ -388,6 +394,32 @@ export default function MapScreen() {
           nextInstruction: instr,
           distanceToNextManeuver: distToNext,
         });
+
+        // 🔍 Dynamic zoom calculé à partir de la vitesse + contexte
+        let targetZoom = 16;
+
+        if (typeof speed === "number" && speed > 0.5 && speed < 20) {
+          const kmh = speed * 3.6;
+
+          if (kmh < 8) targetZoom = 17.2; // très lent / pause -> zoom fort
+          else if (kmh < 15) targetZoom = 16.6; // balade tranquille
+          else if (kmh < 25) targetZoom = 15.8; // rythme soutenu
+          else targetZoom = 15.2; // très rapide -> on dézoome un peu
+        } else {
+          // no speed: départ / GPS poor
+          targetZoom = 16.8;
+        }
+
+        // contexte manœuvre : on zoome un peu plus proche du prochain virage
+        if (distToNext < 60) targetZoom += 0.6;
+        else if (distToNext < 120) targetZoom += 0.3;
+
+        // bornes hard pour éviter les trucs extrêmes
+        targetZoom = Math.max(13.5, Math.min(18, targetZoom));
+
+        // lissage (interpolation) pour éviter les sauts
+        const SMOOTH = 0.25;
+        setMapZoom((prev) => prev + (targetZoom - prev) * SMOOTH);
       }
 
       // Off-route entered => vibrate + notif (throttled)
@@ -444,7 +476,6 @@ export default function MapScreen() {
 
       // Arrivé
       if (rem < 25) {
-        // on capture une durée "réelle" approximative
         if (navStartAtRef.current != null) {
           const elapsedSec = (Date.now() - navStartAtRef.current) / 1000;
           setNavActualDurationSec(elapsedSec);
@@ -515,6 +546,16 @@ export default function MapScreen() {
     return () => window.clearTimeout(t);
   }, [rerouteBannerLabel]);
 
+  // Si on sort de la nav, on ramène doucement le zoom vers un niveau neutre
+  useEffect(() => {
+    if (isNavigating) return;
+    setMapZoom((prev) => {
+      const target = 16;
+      const SMOOTH = 0.3;
+      return prev + (target - prev) * SMOOTH;
+    });
+  }, [isNavigating]);
+
   const showResults = results.length > 0 && !isNavigating;
 
   const BOTTOM_EXTRA_PX = -60;
@@ -543,7 +584,7 @@ export default function MapScreen() {
             destination={destination?.center ?? null}
             selectedRoute={selected?.geometry ?? null}
             alternativeRoutes={altRoutes}
-            zoom={15}
+            zoom={mapZoom}
           />
         ) : (
           <div className="h-full w-full flex items-center justify-center">
