@@ -54,10 +54,13 @@ export function useFallDetection(opts: Options = {}) {
   const gyroSpikeCountRef = useRef(0);
 
   useEffect(() => {
+    // ⚠️ Important pour le lint : on “capture” l’instance dans une constante locale
+    const engine = engineRef.current;
+
     if (!enabled) {
       listenerRef.current?.remove();
       listenerRef.current = null;
-      engineRef.current.reset();
+      engine.reset();
       setStatus("idle");
       setConfidence(null);
       return;
@@ -72,7 +75,6 @@ export function useFallDetection(opts: Options = {}) {
     gyroSpikeCountRef.current = 0;
 
     let mounted = true;
-    const engine = engineRef.current;
 
     (async () => {
       listenerRef.current = await Motion.addListener("accel", (ev) => {
