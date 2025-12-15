@@ -3,8 +3,8 @@ import { requestMotionPermission } from "../../services/permissions/motion";
 import { useFallStore } from "../../store/fall.slice";
 import { useFallDetection } from "./useFallDetection";
 import { loadEmergencyContact } from "../../services/emergency/contact";
-import { openEmergencySms } from "../../services/emergency/sms";
 import { useLocationStore } from "../../store/location.slice";
+import { sendEmergencyAlert } from "../../services/emergency/alert";
 
 export default function FallDetectionPanel() {
   const enabled = useFallStore((s) => s.enabled);
@@ -46,10 +46,16 @@ export default function FallDetectionPanel() {
           alert("Aucun contact d’urgence configuré (Réglages).");
           return;
         }
-        await openEmergencySms({ contact: c, currentLocation: fix ?? null });
+
+        await sendEmergencyAlert({
+          contact: c,
+          currentLocation: fix ?? null,
+        });
       } finally {
         // allow again for future detections
-        setTimeout(() => (sendingRef.current = false), 1500);
+        setTimeout(() => {
+          sendingRef.current = false;
+        }, 1500);
       }
     },
   });
@@ -89,10 +95,11 @@ export default function FallDetectionPanel() {
 
           <button
             onClick={toggle}
-            className={`rounded-xl border px-3 py-2 text-xs ${enabled
+            className={`rounded-xl border px-3 py-2 text-xs ${
+              enabled
                 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
                 : "border-zinc-800 bg-zinc-900 text-zinc-200"
-              }`}
+            }`}
           >
             {enabled ? "Activé" : "Activer"}
           </button>
