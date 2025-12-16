@@ -1,3 +1,5 @@
+// src/services/emergency/alert.ts
+
 import type { LatLng } from "../../types/routing";
 import type { EmergencyContact } from "./contact";
 import type { EmergencyAlertPayload } from "../../types/emergency";
@@ -37,13 +39,14 @@ export async function sendEmergencyAlert(params: {
 
   const body = `${contact.message}${formatLocationLine(currentLocation)}`;
 
-  // 1) Tentative d’envoi vers le backend
+  // 1) Tentative d’envoi vers le backend (automatique)
   if (EMERGENCY_API_URL) {
     try {
       const payload: EmergencyAlertPayload = {
         clientId: "softride-local", // TODO: remplacer plus tard par un vrai ID user/device
         triggeredAt: new Date().toISOString(),
         platform: "capacitor-app",
+        appVersion: undefined,
         location: currentLocation
           ? {
               coords: {
@@ -53,6 +56,10 @@ export async function sendEmergencyAlert(params: {
               accuracyMeters: null,
             }
           : null,
+        contact: {
+          phone: contact.phone,
+          message: contact.message,
+        },
       };
 
       await fetch(EMERGENCY_API_URL, {
