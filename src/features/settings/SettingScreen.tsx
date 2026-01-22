@@ -7,22 +7,27 @@ import {
   clearEmergencyContact,
   type EmergencyContact,
 } from "../../services/emergency/contact";
-import { openEmergencySms } from "../../services/emergency/sms";
+import { sendEmergencyEmail } from "../../services/emergency/email";
 import { useLocationStore } from "../../store/location.slice";
 
 const DEFAULT_MSG =
   "🚨 SoftRide: chute potentielle détectée. Si je ne réponds pas, peux-tu me contacter ?";
 
+function looksLikeEmail(v: string) {
+  const s = v.trim();
+  return s.includes("@") && s.includes(".");
+}
+
 export default function SettingsScreen() {
   const fix = useLocationStore((s) => s.fix);
 
   const [contact, setContact] = useState<EmergencyContact>({
-    phone: "",
+    email: "",
     message: DEFAULT_MSG,
   });
   const [status, setStatus] = useState<string | null>(null);
 
-  const phoneOk = useMemo(() => contact.phone.trim().length > 0, [contact.phone]);
+  const emailOk = useMemo(() => looksLikeEmail(contact.email), [contact.email]);
 
   useEffect(() => {
     (async () => {
@@ -33,12 +38,12 @@ export default function SettingsScreen() {
 
   async function handleSave() {
     setStatus(null);
-    if (!contact.phone.trim()) {
-      setStatus("⚠️ Renseigne un numéro de téléphone.");
+    if (!looksLikeEmail(contact.email)) {
+      setStatus("⚠️ Renseigne un email valide.");
       return;
     }
     await saveEmergencyContact({
-      phone: contact.phone.trim(),
+      email: contact.email.trim(),
       message: contact.message?.trim() || DEFAULT_MSG,
     });
     setStatus("✅ Contact enregistré.");
@@ -46,26 +51,36 @@ export default function SettingsScreen() {
 
   async function handleClear() {
     await clearEmergencyContact();
-    setContact({ phone: "", message: DEFAULT_MSG });
+    setContact({ email: "", message: DEFAULT_MSG });
     setStatus("✅ Contact supprimé.");
   }
 
-  async function handleTestSms() {
+  async function handleTestEmail() {
     setStatus(null);
-    const phone = contact.phone.trim();
-    if (!phone) {
-      setStatus("⚠️ Renseigne un numéro avant de tester.");
+
+    const email = contact.email.trim();
+    if (!looksLikeEmail(email)) {
+      setStatus("⚠️ Renseigne un email avant de tester.");
       return;
     }
 
-    const msg =
-      (contact.message?.trim() || DEFAULT_MSG) +
-      "\n\n✅ Test SoftRide : ceci est un message de test (pas une vraie alerte).";
+    try {
+      await sendEmergencyEmail({
+        contact: { email, message: contact.message?.trim() || DEFAULT_MSG },
+        currentLocation: fix ?? null,
+        isTest: true,
+      });
 
-    await openEmergencySms({
-      contact: { phone, message: msg },
-      currentLocation: fix ?? null,
-    });
+      setStatus("✅ Email envoyé (regarde aussi tes spams).");
+    } catch (err: any) {
+      console.error("EmailJS error:", err);
+
+      // EmailJS renvoie souvent { status, text }
+      const status = err?.status ? `status=${err.status}` : "";
+      const text = err?.text ? `text=${err.text}` : (err?.message ?? "Erreur inconnue");
+
+      setStatus(`❌ Email non envoyé. ${status} ${text}`.trim());
+    }
   }
 
   return (
@@ -82,11 +97,11 @@ export default function SettingsScreen() {
         <div className="text-sm font-semibold text-zinc-100">Contact d’urgence</div>
 
         <label className="block space-y-1">
-          <span className="text-xs text-zinc-400">Téléphone</span>
+          <span className="text-xs text-zinc-400">Email</span>
           <input
-            value={contact.phone}
-            onChange={(e) => setContact((c) => ({ ...c, phone: e.target.value }))}
-            placeholder="+33612345678"
+            value={contact.email}
+            onChange={(e) => setContact((c) => ({ ...c, email: e.target.value }))}
+            placeholder="contact@domaine.com"
             className="w-full rounded-xl border border-zinc-800 bg-black/30 px-3 py-2 text-sm outline-none focus:border-sky-500/60"
           />
         </label>
@@ -118,17 +133,17 @@ export default function SettingsScreen() {
         </div>
 
         <button
-          onClick={handleTestSms}
-          disabled={!phoneOk}
+          onClick={handleTestEmail}
+          disabled={!emailOk}
           className="w-full rounded-xl border border-sky-500/30 bg-sky-500/10 px-4 py-2 text-sm text-sky-200 hover:bg-sky-500/15 disabled:opacity-50"
         >
-          Tester l’alerte SMS
+          Tester l’alerte Email
         </button>
 
         {status && <div className="text-xs text-zinc-300">{status}</div>}
 
         <p className="text-xs text-zinc-500">
-          L’alerte ouvre l’app SMS avec un message pré-rempli + ta position (si dispo).
+          L’alerte envoie un email automatique avec un message + ta position (si dispo).
         </p>
 
         <div className="text-[11px] text-zinc-500">
