@@ -3,7 +3,7 @@ import { requestMotionPermission } from "../../services/permissions/motion";
 import { useFallStore } from "../../store/fall.slice";
 import { useFallDetection } from "./useFallDetection";
 import { loadEmergencyContact } from "../../services/emergency/contact";
-import { openEmergencySms } from "../../services/emergency/sms";
+import { sendEmergencyEmail } from "../../services/emergency/email";
 import { useLocationStore } from "../../store/location.slice";
 
 export default function FallDetectionPanel() {
@@ -25,7 +25,7 @@ export default function FallDetectionPanel() {
   useEffect(() => {
     (async () => {
       const c = await loadEmergencyContact();
-      setContactOk(!!c?.phone);
+      setContactOk(!!c?.email);
     })();
   }, []);
 
@@ -42,11 +42,12 @@ export default function FallDetectionPanel() {
 
       try {
         const c = await loadEmergencyContact();
-        if (!c?.phone) {
+        if (!c?.email) {
           alert("Aucun contact d’urgence configuré (Réglages).");
           return;
         }
-        await openEmergencySms({ contact: c, currentLocation: fix ?? null });
+        await sendEmergencyEmail({ contact: c, currentLocation: fix ?? null });
+
       } finally {
         // allow again for future detections
         setTimeout(() => (sendingRef.current = false), 1500);
@@ -62,11 +63,12 @@ export default function FallDetectionPanel() {
         return;
       }
       const c = await loadEmergencyContact();
-      setContactOk(!!c?.phone);
-      if (!c?.phone) {
+      setContactOk(!!c?.email);
+      if (!c?.email) {
         alert("Configure un contact d’urgence dans Réglages avant d’activer.");
         return;
       }
+
     }
     setEnabled(!enabled);
   }
@@ -90,8 +92,8 @@ export default function FallDetectionPanel() {
           <button
             onClick={toggle}
             className={`rounded-xl border px-3 py-2 text-xs ${enabled
-                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-                : "border-zinc-800 bg-zinc-900 text-zinc-200"
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+              : "border-zinc-800 bg-zinc-900 text-zinc-200"
               }`}
           >
             {enabled ? "Activé" : "Activer"}
