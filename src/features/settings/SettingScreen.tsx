@@ -57,19 +57,30 @@ export default function SettingsScreen() {
 
   async function handleTestEmail() {
     setStatus(null);
+
     const email = contact.email.trim();
     if (!looksLikeEmail(email)) {
       setStatus("⚠️ Renseigne un email avant de tester.");
       return;
     }
 
-    await sendEmergencyEmail({
-      contact: { email, message: contact.message?.trim() || DEFAULT_MSG },
-      currentLocation: fix ?? null,
-      isTest: true,
-    });
+    try {
+      await sendEmergencyEmail({
+        contact: { email, message: contact.message?.trim() || DEFAULT_MSG },
+        currentLocation: fix ?? null,
+        isTest: true,
+      });
 
-    setStatus("✅ Email de test envoyé (si EmailJS est configuré).");
+      setStatus("✅ Email envoyé (regarde aussi tes spams).");
+    } catch (err: any) {
+      console.error("EmailJS error:", err);
+
+      // EmailJS renvoie souvent { status, text }
+      const status = err?.status ? `status=${err.status}` : "";
+      const text = err?.text ? `text=${err.text}` : (err?.message ?? "Erreur inconnue");
+
+      setStatus(`❌ Email non envoyé. ${status} ${text}`.trim());
+    }
   }
 
   return (
