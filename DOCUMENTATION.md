@@ -168,6 +168,16 @@ Il n'y a pas de tests automatises inclus pour le moment. Les scripts disponibles
 
 Capacitor config: `capacitor.config.ts` (appId `com.softride.app`).
 
+## 12.1 APK via GitHub Releases
+
+Un workflow GitHub Actions genere un APK debug et cree une Release quand un tag `test-v*` est pousse.
+
+Exemple:
+- `git tag test-v1.0.0`
+- `git push origin test-v1.0.0`
+
+Ensuite, l APK est telechargeable depuis la Release correspondante sur GitHub.
+
 ## 13. Depannage rapide
 
 - Carte vide: verifie `VITE_MAPBOX_TOKEN`.
