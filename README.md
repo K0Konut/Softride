@@ -30,11 +30,14 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [Quickstart](#quickstart)
 - [Getting Started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Installation](#installation)
-  - [Usage](#usage)
-  - [Testing](#testing)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Testing](#testing)
+- [Mobile Build](#mobile-build)
+- [Documentation](#documentation)
 
 ---
 
@@ -43,52 +46,70 @@
 SoftRide is a navigation-focused application that helps build and run **high-performance, cross-platform bike navigation** experiences.  
 It combines a modern React + TypeScript front end with native mobile capabilities via Capacitor, Mapbox routing, and safety-oriented features such as fall detection.
 
-### Why SoftRide?
+Why SoftRide?
+- 🎯 **Modular Architecture**
+- 🚀 **Fast Development**
+- 🗺️ **Geospatial & Routing Utilities**
+- 🛡️ **Safety & Emergency Features**
+- 📱 **Cross-Platform Support**
+- 🧰 **Developer Friendly**
 
-SoftRide aims to make it easier to develop **responsive, safety-aware navigation apps** with real-time location and routing.  
-Some of the core ideas are:
+## Quickstart
 
-- 🎯 **Modular Architecture**  
-  Clearly separated features (map, routing, navigation, fall detection) with Zustand stores and services to keep the project scalable and maintainable.
+For contributors who want to run the app fast:
 
-- 🚀 **Fast Development**  
-  Vite, React, TypeScript, and Tailwind CSS provide a fast feedback loop and a strongly typed, modern frontend stack.
+```bash
+git clone https://github.com/K0Konut/Softride.git
+cd Softride
+npm install
+cp .env.example .env
+# Edit .env and set VITE_MAPBOX_TOKEN
+npm run dev
+```
 
-- 🗺️ **Geospatial & Routing Utilities**  
-  Deep integration with Mapbox APIs for bike-friendly routing, alternative paths, geocoding, and route geometry helpers (snap to route, distance to route, ETA, etc.).
-
-- 🛡️ **Safety & Emergency Features**  
-  Includes primitives for fall detection, countdown before alert, haptics, and local notifications to enhance rider safety.
-
-- 📱 **Cross-Platform Support**  
-  Runs as a web app and can be bundled to Android/iOS using Capacitor, bridging web code with native capabilities (GPS, haptics, notifications).
-
-- 🧰 **Developer Friendly**  
-  Comes with ESLint, TypeScript strictness, GitHub Actions (lint / typecheck / build), and debug utilities (GPS quality pill, fall debug panel) to keep the app stable as it grows.
-
----
+Notes:
+- Map features require `VITE_MAPBOX_TOKEN`.
+- Email alerts are optional and require EmailJS keys.
 
 ## Getting Started
 
-### Prerequisites
+## Prerequisites
 
-This project assumes you have the following installed:
+- Node.js LTS
+- npm (or pnpm/yarn if you adapt commands)
+- Mapbox account (token required for map/routing)
+- Android Studio (optional, for Android builds)
+- Xcode (optional, macOS only, for iOS builds)
 
-- **Programming Language:** TypeScript (via Node.js toolchain)
-- **Runtime:** Node.js (LTS recommended)
-- **Package Manager:** `npm` (ou `pnpm`/`yarn` si tu adaptes les commandes)
-- **Mobile tooling (optionnel mais recommandé) :**
-  - Android Studio (AVD) pour tester sur Android
-  - Xcode / simulators pour tester sur iOS (si tu es sur macOS)
-- **Mapbox account:** une clé d’API Mapbox valide pour la carte, le routing et le geocoding.
+## Installation
 
----
+1. `git clone https://github.com/K0Konut/Softride.git`
+2. `cd Softride`
+3. `npm install`
+4. `cp .env.example .env`
+5. Set `VITE_MAPBOX_TOKEN` in `.env`
+6. `npm run dev`
 
-### Installation
+## Usage
 
-Build SoftRide from source and install dependencies.
+- Go to the map screen and search for a destination.
+- Select a destination to calculate safe routes.
+- Start navigation to follow guidance with live ETA and off-route detection.
+- Configure fall detection and emergency contact in Settings.
 
-1. **Clone the repository :**
+## Testing
 
-   ```bash
-   git clone https://github.com/K0Konut/Softride.git
+- `npm run lint`
+- `npm run typecheck`
+
+## Mobile Build
+
+1. `npm run build`
+2. `npm run cap:sync`
+3. `npm run cap:open:android` or `npm run cap:open:ios`
+
+Capacitor config: `capacitor.config.ts` (appId `com.softride.app`).
+
+## Documentation
+
+Full documentation is available in `DOCUMENTATION.md`.
